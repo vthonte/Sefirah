@@ -1,4 +1,4 @@
-﻿<Project Sdk="Uno.Sdk">
+<Project Sdk="Uno.Sdk">
     <PropertyGroup>
         <TargetFrameworks>net10.0-windows10.0.26100;net10.0-desktop</TargetFrameworks>
 
@@ -58,15 +58,15 @@
 
     <PropertyGroup Condition="'$(UapAppxPackageBuildMode)' == 'Sideloading'">
         <GenerateTemporaryStoreCertificate>False</GenerateTemporaryStoreCertificate>
-        <PackageCertificateKeyFile>Sefirah_TemporaryKey.pfx</PackageCertificateKeyFile>
-        <PackageCertificateThumbprint>15cbc5825d3fe452c20ec20aa3191c836a6e302d</PackageCertificateThumbprint>
+        <PackageCertificateKeyFile Condition="'$(PackageCertificateKeyFile)' == ''">Sefirah_TemporaryKey.pfx</PackageCertificateKeyFile>
+        <PackageCertificateThumbprint Condition="'$(PackageCertificateThumbprint)' != ''">$(PackageCertificateThumbprint)</PackageCertificateThumbprint>
     </PropertyGroup>
 
     <PropertyGroup>
         <UnoIconForegroundFile>Assets\Icons\icon_foreground.svg</UnoIconForegroundFile>
         <UnoIconBackgroundColor Condition="'$(IsWinAppSdk)' == 'true'">Transparent</UnoIconBackgroundColor>
         <GenerateTestArtifacts>False</GenerateTestArtifacts>
-        <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
+        <AppxPackageSigningEnabled Condition="'$(AppxPackageSigningEnabled)' == ''">False</AppxPackageSigningEnabled>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100'">

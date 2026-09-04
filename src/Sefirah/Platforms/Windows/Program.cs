@@ -21,6 +21,28 @@ internal class Program
         // Get app activation arguments
         var activatedArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
 
+        // Check for package identity
+        bool hasPackageIdentity = false;
+        try
+        {
+            hasPackageIdentity = Package.Current != null;
+        }
+        catch (InvalidOperationException)
+        {
+            hasPackageIdentity = false;
+        }
+
+        if (!hasPackageIdentity)
+        {
+            MessageBox(
+                IntPtr.Zero,
+                "Sefirah is an MSIX-packaged Windows application and cannot be run directly as a loose executable.\n\nPlease install Sefirah using the provided .msix package or run Install.ps1.",
+                "Sefirah - Package Identity Required",
+                0x00000010 /* MB_ICONERROR */ | 0x00000000 /* MB_OK */
+            );
+            return;
+        }
+
         // Only the hosted app process has package identity containing ".Hosted."
         var isHostedAppProcess = Package.Current.Id.Name.Contains(".Hosted.", StringComparison.OrdinalIgnoreCase);
 
@@ -113,4 +135,7 @@ internal class Program
         }
         return null;
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern int MessageBox(IntPtr hWnd, string lpText, string lpCaption, uint uType);
 }

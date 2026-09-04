@@ -28,15 +28,51 @@ jobs:
             10.0.x
           dotnet-quality: 'preview'
 
+      - name: Create Temporary Signing Certificate
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type Custom `
+            -Subject "CN=BEC0F2AA-07EB-4762-A2FE-13550AF289A5" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "Sefirah Sideload" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+          $pfxPath = "src/Sefirah/Sefirah_TemporaryKey.pfx"
+          $password = ConvertTo-SecureString -String "SefirahPassword123!" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $password
+          Export-Certificate -Cert $cert -FilePath "src/Sefirah/Sefirah.cer"
+
       - name: Restore NuGet Packages
         run: dotnet restore src/Sefirah.sln
 
-      - name: Publish Windows App (net10.0-windows10.0.26100 x64)
+      - name: Publish Windows App MSIX (net10.0-windows10.0.26100 x64)
+        shell: pwsh
         run: |
-          dotnet publish src/Sefirah/Sefirah.csproj -c Release -f net10.0-windows10.0.26100 -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -o publish/windows-x64
+          dotnet publish src/Sefirah/Sefirah.csproj -c Release -f net10.0-windows10.0.26100 `
+            -p:Platform=x64 `
+            -p:GenerateAppxPackageOnBuild=true `
+            -p:AppxBundle=Never `
+            -p:UapAppxPackageBuildMode=Sideloading `
+            -p:AppxPackageSigningEnabled=true `
+            -p:PackageCertificateKeyFile="Sefirah_TemporaryKey.pfx" `
+            -p:PackageCertificatePassword="SefirahPassword123!" `
+            -p:AppxPackageDir="$pwd/publish/AppPackages/"
 
-      - name: Upload Windows Build Artifact
+      - name: Prepare Sideload Package
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path publish/AppPackages -Recurse
+          $msixFile = Get-ChildItem -Path "publish/AppPackages" -Recurse -Filter "*.msix" | Select-Object -First 1
+          if (-not $msixFile) {
+            Write-Error "No .msix file found in publish/AppPackages"
+            exit 1
+          }
+          $targetDir = $msixFile.DirectoryName
+          Copy-Item "src/Sefirah/Sefirah.cer" -Destination $targetDir
+          Copy-Item "scripts/Install.ps1" -Destination $targetDir
+
+      - name: Upload Windows MSIX Sideload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sefirah-Windows-x64
-          path: publish/windows-x64
+          name: Sefirah-Windows-x64-Sideload
+          path: publish/AppPackages/
