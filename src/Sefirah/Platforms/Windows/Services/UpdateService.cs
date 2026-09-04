@@ -35,7 +35,7 @@ public partial class UpdateService : ObservableObject, IUpdateService
         try
         {
             // Sideload and developer-signed packages cannot be updated via the Microsoft Store
-            if (Windows.ApplicationModel.Package.Current.SignatureKind != Windows.ApplicationModel.PackageSignatureKind.Store)
+            if (global::Windows.ApplicationModel.Package.Current.SignatureKind != global::Windows.ApplicationModel.PackageSignatureKind.Store)
             {
                 IsUpdateAvailable = false;
                 return;
