@@ -241,19 +241,6 @@ public sealed partial class DeviceSettingsViewModel : BaseViewModel
         }
     }
 
-    public bool AutoReconnectOnUsbDisconnect
-    {
-        get => DeviceSettings.AutoReconnectOnUsbDisconnect;
-        set
-        {
-            if (DeviceSettings.AutoReconnectOnUsbDisconnect != value)
-            {
-                DeviceSettings.AutoReconnectOnUsbDisconnect = value;
-                OnPropertyChanged();
-            }
-        }
-    }
-
     public bool ScreenOff
     {
         get => DeviceSettings.ScreenOff;

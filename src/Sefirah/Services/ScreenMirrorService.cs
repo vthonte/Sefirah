@@ -556,7 +556,6 @@ public class ScreenMirrorService(
                                                || errText.Contains("Server connection failed", StringComparison.OrdinalIgnoreCase)));
 
                 if (isUsbSession && wasDisconnect && !processCts.IsCancellationRequested
-                    && device.DeviceSettings.AutoReconnectOnUsbDisconnect
                     && device.DeviceSettings.ScrcpyDevicePreference != ScrcpyDevicePreferenceType.Usb)
                 {
                     logger.Info($"USB scrcpy session for {device.Model} disconnected. Preparing auto-reconnect over wireless ADB...");
