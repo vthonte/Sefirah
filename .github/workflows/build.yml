@@ -1,0 +1,42 @@
+name: Build Sefirah
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+
+      - name: Restore NuGet Packages
+        run: dotnet restore src/Sefirah.sln
+
+      - name: Publish Windows App (net10.0-windows10.0.26100 x64)
+        run: |
+          dotnet publish src/Sefirah/Sefirah.csproj -c Release -f net10.0-windows10.0.26100 -p:Platform=x64 -p:GenerateAppxPackageOnBuild=false -o publish/windows-x64
+
+      - name: Upload Windows Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sefirah-Windows-x64
+          path: publish/windows-x64

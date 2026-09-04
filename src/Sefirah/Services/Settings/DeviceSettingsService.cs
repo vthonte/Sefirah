@@ -313,7 +313,7 @@ internal sealed partial class DeviceSettingsService(string deviceId) : BaseDevic
 
     public bool AdbTcpipModeEnabled
     {
-        get => Get(false);
+        get => Get(true);
         set => Set(value);
     }
 
