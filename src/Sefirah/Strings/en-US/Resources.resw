@@ -487,6 +487,12 @@ page.</value>
   <data name="ScrcpyDevicePreference" xml:space="preserve">
     <value>Device preference</value>
   </data>
+  <data name="AutoReconnectOnUsbDisconnect" xml:space="preserve">
+    <value>Auto-reconnect on USB disconnect</value>
+  </data>
+  <data name="AutoReconnectOnUsbDisconnectDescription" xml:space="preserve">
+    <value>Automatically reopen active mirror sessions over Wi-Fi when USB is unplugged.</value>
+  </data>
   <data name="AskEverytime" xml:space="preserve">
     <value>Ask every time</value>
   </data>

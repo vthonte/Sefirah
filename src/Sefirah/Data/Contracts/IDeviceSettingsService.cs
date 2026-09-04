@@ -235,6 +235,11 @@ public interface IDeviceSettingsService : IBaseSettingsService, INotifyPropertyC
     ScrcpyDevicePreferenceType ScrcpyDevicePreference { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to automatically reconnect mirroring over Wi-Fi when USB is disconnected.
+    /// </summary>
+    bool AutoReconnectOnUsbDisconnect { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to enable virtual display.
     /// </summary>
     bool IsVirtualDisplayEnabled { get; set; }

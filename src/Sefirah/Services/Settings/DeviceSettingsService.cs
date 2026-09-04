@@ -281,6 +281,12 @@ internal sealed partial class DeviceSettingsService(string deviceId) : BaseDevic
         set => Set(value);
     }
 
+    public bool AutoReconnectOnUsbDisconnect
+    {
+        get => Get(true);
+        set => Set(value);
+    }
+
     public bool IsVirtualDisplayEnabled
     {
         get => Get(true);

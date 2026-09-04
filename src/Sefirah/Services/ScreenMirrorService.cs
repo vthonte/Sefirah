@@ -344,7 +344,7 @@ public class ScreenMirrorService(
                 return false;
             }
 
-            StartProcessMonitoring(process, processCts, selectedDeviceSerial);
+            StartProcessMonitoring(process, processCts, selectedDeviceSerial, device, app);
 
 #if WINDOWS
             if (isStartApp)
@@ -378,10 +378,10 @@ public class ScreenMirrorService(
             switch (devicePreferenceType)
             {
                 case ScrcpyDevicePreferenceType.Usb:
-                    selectedDeviceSerial = pairedDevices.FirstOrDefault(d => d.Type is DeviceType.USB)?.Serial;
+                    selectedDeviceSerial = pairedDevices.FirstOrDefault(d => d.IsOnline && d.Type is DeviceType.USB)?.Serial;
                     break;
                 case ScrcpyDevicePreferenceType.Tcpip:
-                    selectedDeviceSerial = pairedDevices.FirstOrDefault(d => d.Type is DeviceType.WIFI)?.Serial;
+                    selectedDeviceSerial = pairedDevices.FirstOrDefault(d => d.IsOnline && d.Type is DeviceType.WIFI)?.Serial;
                     if (string.IsNullOrEmpty(selectedDeviceSerial) && !string.IsNullOrEmpty(device.Address))
                     {
                         if (await adbService.TryConnectTcp(device.Address, device.Model))
@@ -391,15 +391,15 @@ public class ScreenMirrorService(
                     }
                     break;
                 case ScrcpyDevicePreferenceType.Auto:
-                    // Prioritize USB if connected, otherwise use Wi-Fi
-                    var usbDevice = pairedDevices.FirstOrDefault(d => d.Type is DeviceType.USB);
+                    // Prioritize USB if connected and online, otherwise use Wi-Fi
+                    var usbDevice = pairedDevices.FirstOrDefault(d => d.IsOnline && d.Type is DeviceType.USB);
                     if (usbDevice is not null)
                     {
                         selectedDeviceSerial = usbDevice.Serial;
                     }
                     else
                     {
-                        var wifiDev = pairedDevices.FirstOrDefault(d => d.Type is DeviceType.WIFI);
+                        var wifiDev = pairedDevices.FirstOrDefault(d => d.IsOnline && d.Type is DeviceType.WIFI);
                         if (wifiDev is not null)
                         {
                             selectedDeviceSerial = wifiDev.Serial;
@@ -414,7 +414,7 @@ public class ScreenMirrorService(
                     }
                     break;
                 case ScrcpyDevicePreferenceType.AskEverytime:
-                    selectedDeviceSerial = await ShowDeviceSelectionDialog(pairedDevices);
+                    selectedDeviceSerial = await ShowDeviceSelectionDialog(pairedDevices.Where(d => d.IsOnline).ToList());
                     if (string.IsNullOrEmpty(selectedDeviceSerial))
                     {
                         logger.Warn("No device selected for scrcpy");
@@ -505,7 +505,7 @@ public class ScreenMirrorService(
         adbService.UnlockDevice(adbDevice.DeviceData, commands);
     }
 
-    private void StartProcessMonitoring(Process process, CancellationTokenSource processCts, string deviceSerial)
+    private void StartProcessMonitoring(Process process, CancellationTokenSource processCts, string deviceSerial, PairedDevice device, ApplicationItem? app)
     {
         var errorOutput = new StringBuilder();
         
@@ -533,23 +533,38 @@ public class ScreenMirrorService(
         process.BeginErrorReadLine();
         logger.Info($"scrcpy process started {process.Id}");
        
-
-        scrcpyProcesses.Add(deviceSerial, process);
+        scrcpyProcesses[deviceSerial] = process;
 
         Task.Run(async () =>
         {
+            bool shouldReconnect = false;
             try
             {
                 await process.WaitForExitAsync(processCts.Token);
                 logger.Info($"scrcpy process exited with code: {process.ExitCode}");
-                
-                if (process.ExitCode != 0 && process.ExitCode != 2)
+
+                bool isUsbSession = !string.IsNullOrEmpty(deviceSerial) && !deviceSerial.Contains(':');
+                string errText;
+                lock (errorOutput)
                 {
-                    string errorMessage;
-                    lock (errorOutput)
-                    {
-                        errorMessage = $"Scrcpy process exited with code {process.ExitCode}\n\nError Output:\n{errorOutput.ToString().TrimEnd()}";
-                    }
+                    errText = errorOutput.ToString();
+                }
+
+                bool wasDisconnect = process.ExitCode == 2
+                    || (process.ExitCode != 0 && (errText.Contains("Device disconnected", StringComparison.OrdinalIgnoreCase)
+                                               || errText.Contains("Connection reset", StringComparison.OrdinalIgnoreCase)
+                                               || errText.Contains("Server connection failed", StringComparison.OrdinalIgnoreCase)));
+
+                if (isUsbSession && wasDisconnect && !processCts.IsCancellationRequested
+                    && device.DeviceSettings.AutoReconnectOnUsbDisconnect
+                    && device.DeviceSettings.ScrcpyDevicePreference != ScrcpyDevicePreferenceType.Usb)
+                {
+                    logger.Info($"USB scrcpy session for {device.Model} disconnected. Preparing auto-reconnect over wireless ADB...");
+                    shouldReconnect = true;
+                }
+                else if (process.ExitCode != 0 && process.ExitCode != 2)
+                {
+                    string errorMessage = $"Scrcpy process exited with code {process.ExitCode}\n\nError Output:\n{errText.TrimEnd()}";
                     logger.Error($"Scrcpy failed: {errorMessage}");
 
                     await dispatcher.EnqueueAsync(async () =>
@@ -601,6 +616,30 @@ public class ScreenMirrorService(
                 if (ReferenceEquals(cts, processCts))
                 {
                     cts = null;
+                }
+            }
+
+            if (shouldReconnect)
+            {
+                await Task.Delay(500);
+                var wifiDevice = devices.FirstOrDefault(d => d.IsOnline && d.Type is DeviceType.WIFI && device.IsMatchingAdbDevice(d));
+                bool wifiAvailable = wifiDevice != null;
+                if (!wifiAvailable && !string.IsNullOrEmpty(device.Address))
+                {
+                    wifiAvailable = await adbService.TryConnectTcp(device.Address, device.Model);
+                }
+
+                if (wifiAvailable)
+                {
+                    logger.Info($"Auto-reconnecting scrcpy over Wi-Fi for package: {app?.PackageName ?? "full screen mirror"}");
+                    await dispatcher.EnqueueAsync(async () =>
+                    {
+                        await StartScrcpy(device, app);
+                    });
+                }
+                else
+                {
+                    logger.Warn($"Auto-reconnect over Wi-Fi aborted: no online wireless ADB endpoint found for {device.Model}");
                 }
             }
         }, processCts.Token);
