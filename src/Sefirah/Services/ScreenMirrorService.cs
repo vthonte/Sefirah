@@ -395,10 +395,6 @@ public class ScreenMirrorService(
                     var usbDevice = pairedDevices.FirstOrDefault(d => d.Type is DeviceType.USB);
                     if (usbDevice is not null)
                     {
-                        if (deviceSettings.AdbTcpipModeEnabled)
-                        {
-                            argBuilder.Add("--tcpip");
-                        }
                         selectedDeviceSerial = usbDevice.Serial;
                     }
                     else

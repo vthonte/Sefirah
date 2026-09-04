@@ -200,7 +200,11 @@ public class AdbService(
             _ = Task.Run(async () => await GrantSensitiveNotificationAsync(connectedDevice));
             if (connectedDevice.Type is DeviceType.USB)
             {
-                _ = Task.Run(async () => await AutoSetupWirelessAdbAsync(connectedDevice));
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(2000);
+                    await AutoSetupWirelessAdbAsync(connectedDevice);
+                });
             }
         }
         catch (Exception ex)
@@ -856,9 +860,18 @@ public class AdbService(
             // Find device IP: first check paired devices
             string targetIp = string.Empty;
             var pairedDevice = deviceManager.PairedDevices.FirstOrDefault(pd => pd.IsMatchingAdbDevice(usbDevice));
-            if (pairedDevice is not null && !string.IsNullOrEmpty(pairedDevice.Address))
+            if (pairedDevice is not null)
             {
-                targetIp = pairedDevice.Address;
+                if (!pairedDevice.DeviceSettings.AdbAutoConnect)
+                {
+                    logger.Debug($"AdbAutoConnect disabled for {usbDevice.Serial}, skipping auto wireless setup");
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(pairedDevice.Address))
+                {
+                    targetIp = pairedDevice.Address;
+                }
             }
 
             // If not found from paired device, query IP directly from Android via adb shell
