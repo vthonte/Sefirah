@@ -93,7 +93,7 @@ public class DiscoveryService(
 
     private void OnDiscoveredMdnsService(object? sender, DiscoveredMdnsServiceArgs e)
     {
-        sessionManager.Connect(e.DeviceId, e.Address, e.Port);
+        sessionManager.Connect(e.DeviceId, e.Address, e.Port > 0 ? e.Port : 5150);
     }
 
     private async void BroadcastDeviceInfoAsync(UdpBroadcast udpBroadcast)
@@ -125,7 +125,7 @@ public class DiscoveryService(
 
             if (broadcast.DeviceId == localDevice?.DeviceId || address is null) return;
 
-            sessionManager.Connect(broadcast.DeviceId, address.ToString(), broadcast.Port);
+            sessionManager.Connect(broadcast.DeviceId, address.ToString(), broadcast.Port > 0 ? broadcast.Port : 5150);
         }
         catch (Exception ex)
         {

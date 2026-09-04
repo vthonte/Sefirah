@@ -35,7 +35,11 @@ public partial class App : Application
         // Configure exception handlers
         UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.ExceptionObject as Exception);
-        TaskScheduler.UnobservedTaskException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.Exception);
+        TaskScheduler.UnobservedTaskException += (sender, e) =>
+        {
+            AppLifecycleHelper.HandleAppUnhandledException(e.Exception);
+            e.SetObserved();
+        };
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

@@ -32,6 +32,21 @@ public partial class UpdateService : ObservableObject, IUpdateService
 
     public async Task CheckForUpdatesAsync()
     {
+        try
+        {
+            // Sideload and developer-signed packages cannot be updated via the Microsoft Store
+            if (Windows.ApplicationModel.Package.Current.SignatureKind != Windows.ApplicationModel.PackageSignatureKind.Store)
+            {
+                IsUpdateAvailable = false;
+                return;
+            }
+        }
+        catch
+        {
+            IsUpdateAvailable = false;
+            return;
+        }
+
         await GetUpdatePackagesAsync();
 
         if (updatePackages is not null && updatePackages.Count > 0)
