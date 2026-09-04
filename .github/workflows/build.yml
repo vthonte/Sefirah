@@ -28,19 +28,11 @@ jobs:
             10.0.x
           dotnet-quality: 'preview'
 
-      - name: Create Temporary Signing Certificate
+      - name: Setup Signing Certificate
         shell: pwsh
         run: |
-          $cert = New-SelfSignedCertificate -Type Custom `
-            -Subject "CN=BEC0F2AA-07EB-4762-A2FE-13550AF289A5" `
-            -KeyUsage DigitalSignature `
-            -FriendlyName "Sefirah Sideload" `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-          $pfxPath = "src/Sefirah/Sefirah_TemporaryKey.pfx"
-          $password = ConvertTo-SecureString -String "SefirahPassword123!" -Force -AsPlainText
-          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $password
-          Export-Certificate -Cert $cert -FilePath "src/Sefirah/Sefirah.cer"
+          Copy-Item "certs/Sefirah_Dev.pfx" -Destination "src/Sefirah/Sefirah_TemporaryKey.pfx"
+          Copy-Item "certs/Sefirah_Dev.cer" -Destination "src/Sefirah/Sefirah.cer"
 
       - name: Restore NuGet Packages
         run: dotnet restore src/Sefirah.sln
