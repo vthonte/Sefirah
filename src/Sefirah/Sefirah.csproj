@@ -10,8 +10,8 @@
         <!-- App Identifier -->
         <ApplicationId>com.sefirah.ai</ApplicationId>
         <!-- Versions -->
-        <ApplicationDisplayVersion>3.2.0</ApplicationDisplayVersion>
-        <ApplicationVersion>12</ApplicationVersion>
+        <ApplicationDisplayVersion>3.2.1</ApplicationDisplayVersion>
+        <ApplicationVersion>13</ApplicationVersion>
         <!-- Package Publisher -->
         <ApplicationPublisher>vthonte</ApplicationPublisher>
         <!-- Package Description -->

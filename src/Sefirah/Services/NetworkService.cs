@@ -57,7 +57,7 @@ public class NetworkService(
             {
                 server = new Server(SslHelper.GetSslContext(), IPAddress.IPv6Any, port, this)
                 {
-                    OptionReuseAddress = true,
+                    OptionReuseAddress = false,
                     OptionDualMode = true,
                 };
 

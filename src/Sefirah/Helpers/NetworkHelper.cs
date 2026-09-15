@@ -16,6 +16,7 @@ public static class NetworkHelper
             {
                 var gateway = ni.GetIPProperties().GatewayAddresses
                     .FirstOrDefault(g => g.Address.AddressFamily is AddressFamily.InterNetwork)?.Address;
+                var isPhysical = ni.NetworkInterfaceType is NetworkInterfaceType.Wireless80211 or NetworkInterfaceType.Ethernet;
 
                 foreach (UnicastIPAddressInformation ip in ni.GetIPProperties().UnicastAddresses)
                 {
@@ -25,15 +26,19 @@ public static class NetworkHelper
                         addresses.Add(new IPAddressInfo(
                             Address: ip.Address,
                             SubnetMask: ip.IPv4Mask,
-                            Gateway: gateway
+                            Gateway: gateway,
+                            IsPhysical: isPhysical
                         ));
                     }
                 }
             }
         }
         
-        return addresses;
+        return addresses
+            .OrderByDescending(a => a.Gateway is not null && !a.Gateway.Equals(IPAddress.Any))
+            .ThenByDescending(a => a.IsPhysical)
+            .ToList();
     }
 
-    public record IPAddressInfo(IPAddress Address, IPAddress SubnetMask, IPAddress? Gateway);
+    public record IPAddressInfo(IPAddress Address, IPAddress SubnetMask, IPAddress? Gateway, bool IsPhysical = false);
 }

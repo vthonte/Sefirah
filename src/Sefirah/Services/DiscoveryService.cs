@@ -164,12 +164,13 @@ public class DiscoveryService(
             var payload = new QrCodePayload
             {
                 Addresses = addresses,
-                Port = broadcast.Port,
+                Port = NetworkService.ServerPort > 0 ? NetworkService.ServerPort : broadcast.Port,
                 DeviceId = broadcast.DeviceId,
                 DeviceName = broadcast.DeviceName
             };
             var json = JsonMessageSerializer.Serialize(payload);
             var deepLink = $"sefirah://pair?data={Uri.EscapeDataString(json)}";
+            logger.Info($"Generated QR pairing deepLink for {payload.DeviceName} (IP: {addresses.FirstOrDefault()}:{payload.Port})");
 
             var qrCodeBytes = ImageHelper.GenerateQrCode(deepLink);
             if (qrCodeBytes is null)
