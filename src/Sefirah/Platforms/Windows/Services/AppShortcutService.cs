@@ -13,7 +13,7 @@ public sealed class AppShortcutService(ILogger logger) : IAppShortcutService
 
     private const string HostedAppsFolder = HostedPackageIdentity.HostedAppsFolder;
     /// <summary>Must match the HostRuntime Id in the host's Package.appxmanifest (windows.hostRuntime extension).</summary>
-    private const string HostRuntimeId = "SefirahHost";
+    private const string HostRuntimeId = "SefirahAIHost";
     private const string UnsignedPublisherOid = "OID.2.25.311729368913984317654407730594956997722=1";
 
     /// <summary>Prefix for the package parameter in the hosted app manifest</summary>

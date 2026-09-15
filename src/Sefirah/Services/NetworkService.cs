@@ -585,7 +585,11 @@ public class NetworkService(
             if (existingDevice.IsConnectedOrConnecting || existingDevice.IsForcedDisconnect)
                 return;
 
-            existingDevice.Port = port;
+            if (port > 0)
+                existingDevice.Port = port;
+            else if (existingDevice.Port <= 0)
+                existingDevice.Port = 5150;
+
             ConnectCore(existingDevice, [address]);
             return;
         }
@@ -601,9 +605,10 @@ public class NetworkService(
         Client? client = null;
         try
         {
-            logger.Info($"Connecting to {address}:{port}");
+            var targetPort = port > 0 ? port : 5150;
+            logger.Info($"Connecting to {address}:{targetPort}");
 
-            client = new Client(SslHelper.GetSslContext(), address, port, this);
+            client = new Client(SslHelper.GetSslContext(), address, targetPort, this);
             var tcs = new TaskCompletionSource<bool>();
             handshakeCompletion[client.Id] = tcs;
 
@@ -679,9 +684,10 @@ public class NetworkService(
                 cts.Token.ThrowIfCancellationRequested();
 
                 var clientContext = SslHelper.CreateSslContext(device.Certificate);
+                var targetPort = device.Port > 0 ? device.Port : 5150;
 
-                logger.Info($"Connecting to {address}:{device.Port}");
-                var client = new Client(clientContext, address, device.Port, this);
+                logger.Info($"Connecting to {address}:{targetPort}");
+                var client = new Client(clientContext, address, targetPort, this);
                 var tcs = new TaskCompletionSource<bool>();
                 handshakeCompletion[client.Id] = tcs;
 
@@ -711,7 +717,7 @@ public class NetworkService(
                 }
                 catch (Exception ex)
                 {
-                    logger.Debug($"Failed to connect to {address}:{device.Port}", ex);
+                    logger.Debug($"Failed to connect to {address}:{targetPort}", ex);
                 }
                 finally
                 {
@@ -882,7 +888,10 @@ public class NetworkService(
 
         pairedDevice.Client = client;
         pairedDevice.Address = address;
-        pairedDevice.Port = client.Port;
+        if (client.Port > 0)
+            pairedDevice.Port = client.Port;
+        else if (pairedDevice.Port <= 0)
+            pairedDevice.Port = 5150;
 
         await App.MainWindow.DispatcherQueue.EnqueueAsync(() =>
         {

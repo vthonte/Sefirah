@@ -10,7 +10,7 @@ public sealed partial class SystemTrayService : ISystemTrayService
 {
     private const string DarkTrayIconName = "SefirahDark.ico";
     private const string LightTrayIconName = "SefirahLight.ico";
-    private static readonly Guid TrayIconId = new("6B3A1F2E-9C4D-4E5F-8A0B-1D2E3F4A5B6C");
+    private static readonly Guid TrayIconId = new("7C4B2F3E-AD5E-4F60-9B1C-2E3F4A5B6C7D");
 
     private readonly ILogger logger;
     private readonly UISettings uiSettings = new();
@@ -28,7 +28,7 @@ public sealed partial class SystemTrayService : ISystemTrayService
         var iconPath = GetTrayIconPath();
         try
         {
-            trayIcon = new SystemTrayIcon(iconPath, "Sefirah", TrayIconId);
+            trayIcon = new SystemTrayIcon(iconPath, "Sefirah AI", TrayIconId);
             trayIcon.Show();
 
             IsAvailable = trayIcon.IsVisible;

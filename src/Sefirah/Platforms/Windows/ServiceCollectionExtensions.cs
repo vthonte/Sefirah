@@ -82,7 +82,7 @@ public static class ServiceCollectionExtensions
         services
             .AddOptionsWithValidateOnStart<ProviderOptions>()
             .Configure<IConfiguration>((options, config) => {
-                options.ProviderId = "Shrimqy:Sefirah";
+                options.ProviderId = "vthonte:Sefirah-AI";
             })
             .Services
             .AddSingleton<SyncProviderPool>()

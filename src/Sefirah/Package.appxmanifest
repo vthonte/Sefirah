@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Package
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
@@ -26,11 +26,11 @@
     xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
     IgnorableNamespaces="uap rescap rescap5 uap3 uap13 desktop2 desktop3 desktop4 desktop6 desktop7 cloudfiles cloudfiles2 mp">
     
-        <Identity  Version="3.1.0.0" Name="shrimqy.Seki-PhoneLink" Publisher="CN=BEC0F2AA-07EB-4762-A2FE-13550AF289A5"/>
+        <Identity  Version="3.2.0.0" Name="vthonte.Sefirah-AI" Publisher="CN=BEC0F2AA-07EB-4762-A2FE-13550AF289A5"/>
     
     <Properties >
-        <DisplayName>Sefirah</DisplayName>
-        <PublisherDisplayName>shrimqy</PublisherDisplayName>
+        <DisplayName>Sefirah AI</DisplayName>
+        <PublisherDisplayName>vthonte</PublisherDisplayName>
         <Logo>Assets\AppTiles\StoreLogo.png</Logo>
     </Properties >
 
@@ -47,7 +47,7 @@
         <Application Id="App"
             Executable="$targetnametoken$.exe"
             EntryPoint="$targetentrypoint$">
-            <uap:VisualElements  DisplayName="Sefirah" Description="Connect and sync with your android devices." BackgroundColor="transparent"
+            <uap:VisualElements  DisplayName="Sefirah AI" Description="Connect and sync with your android devices." BackgroundColor="transparent"
 			  Square150x150Logo="Assets\AppTiles\Square150x150Logo.png"
 			  Square44x44Logo="Assets\AppTiles\Square44x44Logo.png">
                 <uap:DefaultTile Wide310x150Logo="Assets\AppTiles\Wide310x150Logo.png"  Square71x71Logo="Assets\AppTiles\SmallTile.png" Square310x310Logo="Assets\AppTiles\LargeTile.png">
@@ -61,8 +61,8 @@
             </uap:VisualElements >
             <Extensions>
                 <uap:Extension Category="windows.protocol">
-                    <uap:Protocol Name="sefirah">
-                        <uap:DisplayName>Sefirah</uap:DisplayName>
+                    <uap:Protocol Name="sefirah-ai">
+                        <uap:DisplayName>Sefirah AI</uap:DisplayName>
                     </uap:Protocol>
                 </uap:Extension>
                 <uap:Extension Category="windows.shareTarget">
@@ -75,9 +75,9 @@
                 </uap:Extension>
                 <uap5:Extension Category="windows.startupTask">
                     <uap5:StartupTask
-                    TaskId="8B5D3E3F-9B69-4E8A-A9F7-BFCA793B9AF0"
+                    TaskId="A7D2E5B1-4C8F-4F93-8E26-6C8B3D9A1E2F"
                     Enabled="false"
-                    DisplayName="Sefirah" />
+                    DisplayName="Sefirah AI" />
                 </uap5:Extension>
                 <uap13:Extension Category="windows.phoneCallActivation" />
                 <cloudfiles:Extension Category="windows.cloudFiles">
@@ -100,7 +100,7 @@
                 </desktop:Extension>
                 <com:Extension Category="windows.comServer">
                     <com:ComServer>
-                        <com:ExeServer Executable="Sefirah.exe" DisplayName="Sefirah" Arguments="----AppNotificationActivated:">
+                        <com:ExeServer Executable="Sefirah.exe" DisplayName="Sefirah AI" Arguments="----AppNotificationActivated:">
                             <com:Class Id="2b6c1f58-0e8d-4c66-9bff-d6d2c58e52b6" />
                         </com:ExeServer>
                         <com:ExeServer DisplayName="Sync Command Handler" Executable="$targetnametoken$.exe">
@@ -125,7 +125,7 @@
             </desktop2:FirewallRules>
         </desktop2:Extension>
         <uap10:Extension Category="windows.hostRuntime" Executable="Sefirah.exe" uap10:RuntimeBehavior="packagedClassicApp">
-            <uap10:HostRuntime Id="SefirahHost"/>
+            <uap10:HostRuntime Id="SefirahAIHost"/>
         </uap10:Extension>
     </Extensions>
 

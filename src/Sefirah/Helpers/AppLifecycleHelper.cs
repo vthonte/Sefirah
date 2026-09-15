@@ -160,7 +160,7 @@ public static class AppLifecycleHelper
     public static async Task HandleStartupTaskAsync(bool enable)
     {
 #if WINDOWS
-        var startupTask = await StartupTask.GetAsync("8B5D3E3F-9B69-4E8A-A9F7-BFCA793B9AF0");
+        var startupTask = await StartupTask.GetAsync("A7D2E5B1-4C8F-4F93-8E26-6C8B3D9A1E2F");
 
         if (enable)
         {

@@ -1,0 +1,70 @@
+name: Build Sefirah
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+
+      - name: Setup Signing Certificate
+        shell: pwsh
+        run: |
+          Copy-Item "certs/Sefirah_Dev.pfx" -Destination "src/Sefirah/Sefirah_TemporaryKey.pfx"
+          Copy-Item "certs/Sefirah_Dev.cer" -Destination "src/Sefirah/Sefirah.cer"
+
+      - name: Restore NuGet Packages
+        run: dotnet restore src/Sefirah.sln
+
+      - name: Publish Windows App MSIX (net10.0-windows10.0.26100 x64)
+        shell: pwsh
+        run: |
+          dotnet publish src/Sefirah/Sefirah.csproj -c Release -f net10.0-windows10.0.26100 `
+            -p:Platform=x64 `
+            -p:GenerateAppxPackageOnBuild=true `
+            -p:AppxBundle=Never `
+            -p:UapAppxPackageBuildMode=Sideloading `
+            -p:AppxPackageSigningEnabled=true `
+            -p:PackageCertificateKeyFile="Sefirah_TemporaryKey.pfx" `
+            -p:PackageCertificatePassword="SefirahPassword123!" `
+            -p:AppxPackageDir="$pwd/publish/AppPackages/"
+
+      - name: Prepare Sideload Package
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path publish/AppPackages -Recurse
+          $msixFile = Get-ChildItem -Path "publish/AppPackages" -Recurse -Filter "*.msix" | Select-Object -First 1
+          if (-not $msixFile) {
+            Write-Error "No .msix file found in publish/AppPackages"
+            exit 1
+          }
+          $targetDir = $msixFile.DirectoryName
+          Copy-Item "src/Sefirah/Sefirah.cer" -Destination $targetDir
+          Copy-Item "scripts/Install.ps1" -Destination $targetDir
+
+      - name: Upload Windows MSIX Sideload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sefirah-Windows-x64-Sideload
+          path: publish/AppPackages/
