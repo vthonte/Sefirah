@@ -154,3 +154,29 @@ Matching order:
 - Rings the phone using `RingtoneManager.getActualDefaultRingtoneUri` with fallbacks.
 - Desktop button toggles between Play and Stop.
 - Can be stopped either from the phone screen or by clicking the Desktop button again.
+
+---
+
+## 11. Bluetooth Auto-Enable, 5-Second Pings, & Disconnect Override
+
+### Bluetooth Auto-Enable
+- On Desktop: `BluetoothRadioManager.TryEnableAsync()` uses `Radio.SetStateAsync(RadioState.On)`. The Bluetooth setup dialog includes a direct "Turn on Bluetooth" button and auto-attempts enabling when starting setup.
+- On Android: `BluetoothPairingHandler` does not prematurely reject pairing requests when Bluetooth is off. `BluetoothDiscoverableActivity` tries `adapter.enable()` and falls back to `Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)` to present the standard system prompt before proceeding to discoverable mode.
+
+### 5-Second Keep-Alive Pings
+- Both Desktop and Android support `Ping` and `Pong` `SocketMessage` types.
+- Desktop runs a 5-second periodic keep-alive loop (`NetworkService.StartKeepAliveLoop`).
+- If no message or Pong is received from a connected device within 15 seconds (3 missed pings), Desktop drops the dead socket and initiates clean reconnection.
+- Android's `MessageHandler` automatically replies with `Pong` upon receiving `Ping`.
+
+### Connection Priority & Fast Wi-Fi Detection
+- **Priority**: USB loopback (`127.0.0.1:5153` forward / `5152` reverse) is always prioritized first before Wi-Fi IPs.
+- **Fast Wi-Fi**: Both Desktop (`NetworkChange.NetworkAddressChanged`) and Android (`ConnectivityManager.NetworkCallback`) detect Wi-Fi network changes immediately.
+- A 10-second periodic UDP broadcast loop runs on both sides to discover network IPs rapidly.
+- When connected via USB (`127.0.0.1`) and discovered on Wi-Fi, the connection is seamlessly upgraded to the Wi-Fi IP so wireless ADB and all network features activate without delay.
+
+### Mutual Manual Disconnect Override
+- When a user manually disconnects from either device, automatic background reconnection pauses to respect the user's intent (`IsForcedDisconnect = true`).
+- Either device can override this disconnect at any time:
+  - Clicking **Connect** or **Refresh** on Laptop overrides `forcedDisconnect` and connects to Phone without touching Phone, updating both devices to **Connected**.
+  - Tapping **Connect** or **Sync** on Phone overrides `forcedDisconnect` and connects to Laptop without touching Laptop, updating both devices to **Connected**.
