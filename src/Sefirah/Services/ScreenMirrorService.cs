@@ -423,7 +423,7 @@ public class ScreenMirrorService(
                     break;
             }
         }
-        else if (!string.IsNullOrEmpty(device.Address))
+        else if (!string.IsNullOrEmpty(device.Address) && !device.Address.StartsWith("127."))
         {
             // No ADB devices matched currently, try to connect via TCP over Wi-Fi
             if (await adbService.TryConnectTcp(device.Address, device.Model))
@@ -432,10 +432,18 @@ public class ScreenMirrorService(
             }
         }
 
-        if (string.IsNullOrEmpty(selectedDeviceSerial) && devices.Any(d => d.IsOnline && !string.IsNullOrEmpty(d.Serial)))
+        if (string.IsNullOrEmpty(selectedDeviceSerial))
         {
-            // If no paired devices found, show dialog to select from online devices
-            selectedDeviceSerial = await ShowDeviceSelectionDialog(devices.Where(d => d.IsOnline).ToList());
+            var onlineUsb = devices.Where(d => d.IsOnline && d.Type is DeviceType.USB).ToList();
+            if (onlineUsb.Count == 1)
+            {
+                selectedDeviceSerial = onlineUsb[0].Serial;
+            }
+            else if (devices.Any(d => d.IsOnline && !string.IsNullOrEmpty(d.Serial)))
+            {
+                // If no paired devices found, show dialog to select from online devices
+                selectedDeviceSerial = await ShowDeviceSelectionDialog(devices.Where(d => d.IsOnline).ToList());
+            }
         }
         else if (string.IsNullOrEmpty(selectedDeviceSerial))
         {

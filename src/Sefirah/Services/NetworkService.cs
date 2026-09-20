@@ -89,7 +89,11 @@ public class NetworkService(
 
             if (device.DeviceSettings.AdbAutoConnect)
             {
-                await adbService.TryConnectTcp(device.Address, device.Model);
+                var wifiAddr = device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127."))?.Address;
+                if (!string.IsNullOrEmpty(wifiAddr))
+                {
+                    await adbService.TryConnectTcp(wifiAddr, device.Model);
+                }
             }
         }
     }

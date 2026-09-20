@@ -243,8 +243,6 @@ public class AdbService(
                 _ = Task.Run(async () =>
                 {
                     await SetupUsbPortForwardingAsync(connectedDevice);
-                    await Task.Delay(2000);
-                    await AutoSetupWirelessAdbAsync(connectedDevice);
                 });
             }
         }
@@ -309,7 +307,6 @@ public class AdbService(
                 _ = Task.Run(async () =>
                 {
                     await SetupUsbPortForwardingAsync(deviceInfo);
-                    await AutoSetupWirelessAdbAsync(deviceInfo);
                 });
             }
         }
@@ -360,7 +357,6 @@ public class AdbService(
                         _ = Task.Run(async () =>
                         {
                             await SetupUsbPortForwardingAsync(adbDevice);
-                            await AutoSetupWirelessAdbAsync(adbDevice);
                         });
                     }
                 }
@@ -755,7 +751,8 @@ public class AdbService(
     /// <param name="model">The model of the device to connect to</param>
     public async Task<bool> TryConnectTcp(string host, string model)
     {
-        if (string.IsNullOrWhiteSpace(host)) return false;
+        if (string.IsNullOrWhiteSpace(host) || host.Trim().StartsWith("127.") || host.Trim().Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return false;
 
         const int port = 5555;
         var cleanHost = host.Trim();
@@ -770,46 +767,6 @@ public class AdbService(
                 return true;
             }
 
-            var cleanTargetModel = model?.Replace('_', ' ').Trim();
-            var usbDevice = AdbDevices.FirstOrDefault(d => d.Type is DeviceType.USB && d.IsOnline &&
-                (!string.IsNullOrEmpty(cleanTargetModel) &&
-                 (!string.IsNullOrEmpty(d.Model) &&
-                  (d.Model.Replace('_', ' ').Trim().Equals(cleanTargetModel, StringComparison.OrdinalIgnoreCase) ||
-                   d.Model.Replace('_', ' ').Trim().Contains(cleanTargetModel, StringComparison.OrdinalIgnoreCase) ||
-                   cleanTargetModel.Contains(d.Model.Replace('_', ' ').Trim(), StringComparison.OrdinalIgnoreCase)))));
-
-            if (usbDevice is null)
-            {
-                var onlineUsb = AdbDevices.Where(d => d.Type is DeviceType.USB && d.IsOnline).ToList();
-                if (onlineUsb.Count == 1)
-                {
-                    usbDevice = onlineUsb[0];
-                }
-            }
-
-            if (usbDevice is null) return false;
-            
-            // If connection failed, try to enable TCP/IP mode using ADB if USB is connected
-            var tcpipEnabled = await EnableTcpipMode(usbDevice.Serial);
-            if (!tcpipEnabled)
-            {
-                logger.Error("Failed to enable TCP/IP mode");
-                return false;
-            }
-
-            // Retry wireless connection with backoff to allow adbd time to restart on port 5555
-            for (int attempt = 1; attempt <= 3; attempt++)
-            {
-                await Task.Delay(500 * attempt);
-                result = await ConnectWireless(cleanHost, port);
-                if (result)
-                {
-                    logger.Info($"Successfully connected to {cleanHost}:{port} after enabling TCP/IP mode (attempt {attempt})");
-                    return true;
-                }
-            }
-
-            logger.Error($"TCP/IP connection still failed after enabling TCP/IP mode for {cleanHost}:{port}");
             return false;
         }
         catch (Exception ex)
@@ -1037,23 +994,34 @@ public class AdbService(
 
         try
         {
-            var receiver = new ConsoleOutputReceiver();
+            logger.Info($"Ensuring permissions and appops for {SefirahAndroidPackageId} on {device.Serial}");
             await adbClient.ExecuteShellCommandAsync(
                 device.DeviceData,
-                $"appops get {SefirahAndroidPackageId} RECEIVE_SENSITIVE_NOTIFICATIONS",
-                receiver);
+                $"cmd appops set {SefirahAndroidPackageId} RECEIVE_SENSITIVE_NOTIFICATIONS allow");
 
-            if (receiver.ToString().Contains("allow", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            logger.Info($"Granting RECEIVE_SENSITIVE_NOTIFICATIONS on {device.Serial}");
             await adbClient.ExecuteShellCommandAsync(
                 device.DeviceData,
-                $"appops set {SefirahAndroidPackageId} RECEIVE_SENSITIVE_NOTIFICATIONS allow");
+                $"cmd appops set {SefirahAndroidPackageId} ACCESS_NOTIFICATIONS allow");
+
+            await adbClient.ExecuteShellCommandAsync(
+                device.DeviceData,
+                $"pm grant {SefirahAndroidPackageId} android.permission.READ_CALL_LOG");
+
+            await adbClient.ExecuteShellCommandAsync(
+                device.DeviceData,
+                $"pm grant {SefirahAndroidPackageId} android.permission.READ_PHONE_STATE");
+
+            await adbClient.ExecuteShellCommandAsync(
+                device.DeviceData,
+                $"pm grant {SefirahAndroidPackageId} android.permission.READ_CONTACTS");
+
+            await adbClient.ExecuteShellCommandAsync(
+                device.DeviceData,
+                $"pm grant {SefirahAndroidPackageId} android.permission.POST_NOTIFICATIONS");
         }
         catch (Exception ex)
         {
-            logger.Warn($"Could not grant RECEIVE_SENSITIVE_NOTIFICATIONS on {device.Serial}: {ex.Message}", ex);
+            logger.Warn($"Could not grant permissions on {device.Serial}: {ex.Message}", ex);
         }
     }
 

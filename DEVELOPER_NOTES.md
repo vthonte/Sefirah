@@ -126,3 +126,31 @@ Matching order:
 - **PC**: Windows 11 Desktop (x64), Package Name `vthonte.Sefirah-AI_9yhjgvpvzzxz2`.
 - **Phone**: Samsung Galaxy S23 Ultra (`SM-S918B`), Serial `RZCXC020ZME`, Package ID `com.castle.sefirah.ai`.
 - **ADB Path**: `C:\Users\HP\Downloads\scrcpy-win64-v4.1\scrcpy-win64-v4.1\adb.exe`.
+
+---
+
+## 10. USB Connection Stability & Controls Guide
+
+### ⚠️ NEVER RUN `adb tcpip 5555` AUTOMATICALLY
+- In previous versions, whenever USB connected or `TryConnectTcp` failed, `EnableTcpipMode` ran `adb tcpip 5555`.
+- **`adb tcpip 5555` restarts the Android `adbd` daemon, dropping the physical USB interface.**
+- This caused:
+  - Windows USB disconnect chime ("da-dum").
+  - `scrcpy` crashes.
+  - Sockets and port forwards (`reverse`/`forward`) disconnecting.
+  - Infinite reconnect/disconnect loops every time the phone connected, synced, or unlocked.
+- **Rule**: `TryConnectTcp` only attempts `ConnectWireless` if a valid non-loopback Wi-Fi IP is available. It MUST NEVER run `adb tcpip 5555` automatically.
+
+### DND & Volume Control
+- Setting ringer mode, DND (`setInterruptionFilter`), or volume requires `android.permission.ACCESS_NOTIFICATION_POLICY` and `ACCESS_NOTIFICATIONS` appop.
+- Desktop's `AdbService.GrantSensitiveNotificationAsync` automatically grants these via ADB whenever the device is connected.
+
+### Call Logs Synchronization
+- `CallLogFeature` extends `BoundFeature` and registers a `ContentObserver` on `CallLog.Calls.CONTENT_URI`.
+- On connection, initial call logs are synced.
+- When any call is made/received, `ContentObserver.onChange` pushes the latest calls to Desktop in real-time.
+
+### Play Sound (Find My Phone)
+- Rings the phone using `RingtoneManager.getActualDefaultRingtoneUri` with fallbacks.
+- Desktop button toggles between Play and Stop.
+- Can be stopped either from the phone screen or by clicking the Desktop button again.

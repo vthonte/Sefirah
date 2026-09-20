@@ -10,8 +10,14 @@ public class PlaySoundFeature : IPlaySoundFeature
 
     public async void Toggle(PairedDevice device)
     {
-        if (!device.IsConnected || device.IsPlayingSound)
+        if (!device.IsConnected)
             return;
+
+        if (device.IsPlayingSound)
+        {
+            Stop(device, notifyRemote: true);
+            return;
+        }
 
         device.IsPlayingSound = true;
         device.SendMessage(new PlaySound { IsPlaying = true });

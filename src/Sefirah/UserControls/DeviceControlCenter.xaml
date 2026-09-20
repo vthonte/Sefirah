@@ -1,4 +1,4 @@
-﻿<UserControl
+<UserControl
     x:Class="Sefirah.UserControls.DeviceControlCenter"
     x:Name="Root"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -195,6 +195,7 @@
                                                         Minimum="0"
                                                         Orientation="Vertical"
                                                         PointerCaptureLost="AudioSlider_PointerCaptureLost"
+                                                        PointerReleased="AudioSlider_PointerCaptureLost"
                                                         Tag="{x:Bind}"
                                                         Value="{x:Bind Level, Mode=TwoWay}" />
                                                     <TextBlock
