@@ -161,10 +161,22 @@ public class DiscoveryService(
             var localAddresses = NetworkHelper.GetAllValidAddresses();
             var addresses = localAddresses.Select(addr => addr.Address.ToString()).ToList();
 
+            // If a USB ADB device is connected, include loopback address first for USB-only pairing
+            var adbService = Ioc.Default.GetService<IAdbService>();
+            if (adbService?.AdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline) == true)
+            {
+                addresses.Remove("127.0.0.1");
+                addresses.Insert(0, "127.0.0.1");
+            }
+
+            var port = NetworkService.ServerPort > 0 ? NetworkService.ServerPort : broadcast.Port;
+            // Use port 5152 for loopback (adb reverse tunnel) if the first address is loopback
+            var qrPort = addresses.FirstOrDefault() == "127.0.0.1" ? 5152 : port;
+
             var payload = new QrCodePayload
             {
                 Addresses = addresses,
-                Port = NetworkService.ServerPort > 0 ? NetworkService.ServerPort : broadcast.Port,
+                Port = qrPort,
                 DeviceId = broadcast.DeviceId,
                 DeviceName = broadcast.DeviceName
             };

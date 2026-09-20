@@ -87,11 +87,8 @@ if ($Install) {
     if ($msix) {
         Get-Process Sefirah -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Milliseconds 500
-        Write-Host "`nRemoving existing Sefirah AI package for fresh install..." -ForegroundColor Cyan
-        Get-AppxPackage vthonte.Sefirah-AI -ErrorAction SilentlyContinue | Remove-AppxPackage -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 500
-        Write-Host "`nInstalling signed package ($($msix.FullName))..." -ForegroundColor Cyan
-        Add-AppxPackage -Path $msix.FullName
+        Write-Host "`nUpgrading Sefirah AI package in-place (preserving data)..." -ForegroundColor Cyan
+        Add-AppxPackage -Path $msix.FullName -ForceUpdateFromAnyVersion
         Write-Host "Sefirah AI package installed successfully!" -ForegroundColor Green
     } else {
         Write-Warning "Could not find generated .msix or .msixbundle package in $appPackagesDir."

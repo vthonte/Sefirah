@@ -27,7 +27,7 @@ public class AdbService(
 
     private static readonly string DEFAULT = "Default".GetLocalizedResource();
 
-    private const string SefirahAndroidPackageId = "com.castle.sefirah";
+    private const string SefirahAndroidPackageId = "com.castle.sefirah.ai";
     private const string WorkerNiceName = "sefirah_worker";
 
     public AdbClient AdbClient => adbClient;
@@ -97,12 +97,52 @@ public class AdbService(
         }
     }
 
+    public static string? TryDiscoverAdbPath()
+    {
+        try
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            string[] candidateDirectories =
+            [
+                Path.Combine(userProfile, "Downloads"),
+                Path.Combine(localAppData, "Android", "Sdk", "platform-tools"),
+                Path.Combine(userProfile, "AppData", "Local", "Android", "Sdk", "platform-tools")
+            ];
+
+            foreach (var dir in candidateDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+
+                var directAdb = Path.Combine(dir, "adb.exe");
+                if (File.Exists(directAdb)) return directAdb;
+
+                var matches = Directory.GetFiles(dir, "adb.exe", SearchOption.AllDirectories);
+                var match = matches.FirstOrDefault(File.Exists);
+                if (!string.IsNullOrEmpty(match)) return match;
+            }
+        }
+        catch { }
+        return null;
+    }
+
     public async Task StartAsync()
     {
         try
         {
             var adbPath = userSettingsService.GeneralSettingsService.AdbPath;
-            if (IsMonitoring || string.IsNullOrEmpty(adbPath)) return;
+            if (string.IsNullOrEmpty(adbPath) || !File.Exists(adbPath))
+            {
+                var discovered = TryDiscoverAdbPath();
+                if (!string.IsNullOrEmpty(discovered))
+                {
+                    adbPath = discovered;
+                    userSettingsService.GeneralSettingsService.AdbPath = discovered;
+                }
+            }
+
+            if (IsMonitoring || string.IsNullOrEmpty(adbPath) || !File.Exists(adbPath)) return;
 
             cts = new CancellationTokenSource();
 
@@ -202,6 +242,7 @@ public class AdbService(
             {
                 _ = Task.Run(async () =>
                 {
+                    await SetupUsbPortForwardingAsync(connectedDevice);
                     await Task.Delay(2000);
                     await AutoSetupWirelessAdbAsync(connectedDevice);
                 });
@@ -265,7 +306,11 @@ public class AdbService(
             _ = Task.Run(async () => await GrantSensitiveNotificationAsync(deviceInfo));
             if (deviceInfo.Type is DeviceType.USB)
             {
-                _ = Task.Run(async () => await AutoSetupWirelessAdbAsync(deviceInfo));
+                _ = Task.Run(async () =>
+                {
+                    await SetupUsbPortForwardingAsync(deviceInfo);
+                    await AutoSetupWirelessAdbAsync(deviceInfo);
+                });
             }
         }
         else
@@ -312,7 +357,11 @@ public class AdbService(
                     _ = Task.Run(async () => await GrantSensitiveNotificationAsync(adbDevice));
                     if (adbDevice.Type is DeviceType.USB)
                     {
-                        _ = Task.Run(async () => await AutoSetupWirelessAdbAsync(adbDevice));
+                        _ = Task.Run(async () =>
+                        {
+                            await SetupUsbPortForwardingAsync(adbDevice);
+                            await AutoSetupWirelessAdbAsync(adbDevice);
+                        });
                     }
                 }
             }
@@ -329,23 +378,29 @@ public class AdbService(
                 ?? throw new Exception($"Device {deviceData.Serial} not found in device list");
 
             string androidId = string.Empty;
-            try
+            // Try both package IDs: the AI variant first, then original
+            string[] packagePaths =
+            [
+                $"cat /storage/emulated/0/Android/data/{SefirahAndroidPackageId}/files/device_info.txt",
+                "cat /storage/emulated/0/Android/data/com.castle.sefirah/files/device_info.txt"
+            ];
+            foreach (var shellCmd in packagePaths)
             {
-                var androidIdReceiver = new ConsoleOutputReceiver();
-
-                // adb shell cat /storage/emulated/0/Android/data/com.castle.sefirah/files/device_info.txt
-                // Get the Android ID from the device_info.txt file since we can't directly access the android id of the App 
-                await adbClient.ExecuteShellCommandAsync(deviceData, "cat /storage/emulated/0/Android/data/com.castle.sefirah/files/device_info.txt", androidIdReceiver);
-                var id = androidIdReceiver.ToString().Trim();
-                if (!string.IsNullOrEmpty(id))
+                try
                 {
-                    // Extract the Android ID from the output
-                    androidId = id;
+                    var androidIdReceiver = new ConsoleOutputReceiver();
+                    await adbClient.ExecuteShellCommandAsync(deviceData, shellCmd, androidIdReceiver);
+                    var id = androidIdReceiver.ToString().Trim();
+                    if (!string.IsNullOrEmpty(id) && !id.Contains("No such file", StringComparison.OrdinalIgnoreCase))
+                    {
+                        androidId = id;
+                        break;
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.Error($"Error getting Android ID for {deviceData.Serial}", ex);
+                catch (Exception ex)
+                {
+                    logger.Debug($"Could not read device_info via '{shellCmd}': {ex.Message}");
+                }
             }
 
             // Look for paired devices with matching IP or model
@@ -816,6 +871,65 @@ public class AdbService(
         }
     }
 
+    /// <summary>
+    /// Sets up USB port forwarding so the phone can reach the desktop server (reverse)
+    /// and the desktop can reach the phone's SFTP server (forward).
+    /// </summary>
+    public async Task SetupUsbPortForwardingAsync(AdbDevice usbDevice)
+    {
+        if (usbDevice?.DeviceData is null || usbDevice.State is not DeviceState.Online || usbDevice.Type is not DeviceType.USB)
+            return;
+
+        var adbPath = userSettingsService.GeneralSettingsService.AdbPath;
+        if (string.IsNullOrEmpty(adbPath) || !File.Exists(adbPath)) return;
+
+        var serial = usbDevice.Serial;
+
+        // adb reverse tcp:5152 tcp:5150 — phone connects to 127.0.0.1:5152 which tunnels to desktop's 5150
+        await RunAdbCommandAsync(adbPath, $"-s {serial} reverse tcp:5152 tcp:5150");
+
+        // adb forward tcp:5151 tcp:5151 — desktop connects to localhost:5151 which tunnels to phone's SFTP 5151
+        await RunAdbCommandAsync(adbPath, $"-s {serial} forward tcp:5151 tcp:5151");
+
+        // adb forward tcp:5150 tcp:5150 — desktop connects to localhost:5150 which tunnels to phone's 5150
+        await RunAdbCommandAsync(adbPath, $"-s {serial} forward tcp:5150 tcp:5150");
+
+        logger.Info($"USB port forwarding set up for {serial}");
+    }
+
+    private async Task<string> RunAdbCommandAsync(string adbPath, string arguments)
+    {
+        try
+        {
+            var processInfo = new ProcessStartInfo
+            {
+                FileName = adbPath,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(processInfo);
+            if (process is null) return string.Empty;
+
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0 && !string.IsNullOrEmpty(error))
+                logger.Debug($"adb {arguments}: {error.Trim()}");
+
+            return output.Trim();
+        }
+        catch (Exception ex)
+        {
+            logger.Debug($"RunAdbCommandAsync failed ({arguments}): {ex.Message}");
+            return string.Empty;
+        }
+    }
+
     private async Task AutoSetupWirelessAdbAsync(AdbDevice usbDevice)
     {
         try
@@ -855,7 +969,7 @@ public class AdbService(
             }
 
             // Check if already connected over Wi-Fi
-            if (AdbDevices.Any(d => d.Type is DeviceType.WIFI && d.IsOnline && d.Serial.Split(':')[0] == targetIp))
+            if (AdbDevices.ToList().Any(d => d.Type is DeviceType.WIFI && d.IsOnline && d.Serial.Split(':')[0] == targetIp))
             {
                 logger.Debug($"Wireless ADB already connected for {targetIp}");
                 return;

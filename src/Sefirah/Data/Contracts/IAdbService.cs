@@ -38,4 +38,6 @@ public interface IAdbService
     Task TryStartWorkerAsync(PairedDevice device, string command);
 
     Task<bool> IsLocked(DeviceData deviceData);
+
+    Task SetupUsbPortForwardingAsync(AdbDevice usbDevice);
 }

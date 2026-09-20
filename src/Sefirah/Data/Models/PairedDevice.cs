@@ -115,20 +115,30 @@ public partial class PairedDevice : BaseRemoteDevice
     {
         get
         {
+            if (ConnectionStatus is Connected)
+            {
+                return "Connected.Text".GetLocalizedResource();
+            }
+
+            if (HasAdbConnection)
+            {
+                var hasUsb = ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB);
+                return hasUsb ? "Connected (USB)" : "Connected (ADB)";
+            }
+
             return ConnectionStatus switch
             {
-                Connected => "Connected.Text".GetLocalizedResource(),
                 Connecting => "Connecting",
                 Disconnected => "Disconnected.Text".GetLocalizedResource(),
                 _ => "Unknown"
             };
         }
     }
-    public bool IsDisconnected => ConnectionStatus.IsDisconnected;
-    public bool IsConnected => ConnectionStatus.IsConnected;
+    public bool IsDisconnected => ConnectionStatus.IsDisconnected && !HasAdbConnection;
+    public bool IsConnected => ConnectionStatus.IsConnected || HasAdbConnection;
     public bool IsForcedDisconnect => ConnectionStatus.IsForcedDisconnect;
-    public bool IsConnecting => ConnectionStatus.IsConnecting;
-    public bool IsConnectedOrConnecting => ConnectionStatus.IsConnectedOrConnecting;
+    public bool IsConnecting => ConnectionStatus.IsConnecting && !HasAdbConnection;
+    public bool IsConnectedOrConnecting => ConnectionStatus.IsConnectedOrConnecting || HasAdbConnection;
 
     private BatteryState? batteryStatus;
     public BatteryState? BatteryStatus
@@ -229,6 +239,12 @@ public partial class PairedDevice : BaseRemoteDevice
         deviceSettings = userSettingsService.GetDeviceSettings(deviceId);
     }
 
+    private static string NormalizeModelName(string? model)
+    {
+        if (string.IsNullOrEmpty(model)) return string.Empty;
+        return System.Text.RegularExpressions.Regex.Replace(model, @"[^a-zA-Z0-9]", "").ToUpperInvariant();
+    }
+
     public bool IsMatchingAdbDevice(AdbDevice adbDevice)
     {
         if (adbDevice is null || !adbDevice.IsOnline) return false;
@@ -245,11 +261,11 @@ public partial class PairedDevice : BaseRemoteDevice
         if (Addresses.Any(a => !string.IsNullOrEmpty(a.Address) && adbHost == a.Address))
             return true;
 
-        // 3. Match by Model (normalizing underscores to spaces and case-insensitive)
+        // 3. Match by Model (normalizing away underscores, hyphens, and spaces)
         if (!string.IsNullOrEmpty(adbDevice.Model) && !string.IsNullOrEmpty(Model))
         {
-            var cleanAdbModel = adbDevice.Model.Replace('_', ' ').Trim();
-            var cleanDeviceModel = Model.Replace('_', ' ').Trim();
+            var cleanAdbModel = NormalizeModelName(adbDevice.Model);
+            var cleanDeviceModel = NormalizeModelName(Model);
             if (cleanDeviceModel.Equals(cleanAdbModel, StringComparison.OrdinalIgnoreCase) ||
                 cleanDeviceModel.Contains(cleanAdbModel, StringComparison.OrdinalIgnoreCase) ||
                 cleanAdbModel.Contains(cleanDeviceModel, StringComparison.OrdinalIgnoreCase))
@@ -295,6 +311,13 @@ public partial class PairedDevice : BaseRemoteDevice
                     .ToList();
 
                 ConnectedAdbDevices.AddRange(devices);
+
+                OnPropertyChanged(nameof(HasAdbConnection));
+                OnPropertyChanged(nameof(IsConnected));
+                OnPropertyChanged(nameof(IsDisconnected));
+                OnPropertyChanged(nameof(IsConnecting));
+                OnPropertyChanged(nameof(IsConnectedOrConnecting));
+                OnPropertyChanged(nameof(ConnectionStatusText));
             });
         }
         catch (Exception ex)

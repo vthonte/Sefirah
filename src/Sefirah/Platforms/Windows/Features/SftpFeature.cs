@@ -53,6 +53,14 @@ public class SftpFeature(
             ? device.Address
             : device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address))?.Address;
 
+        // If a USB ADB device is connected for this device, prefer loopback (adb forward)
+        var hasUsb = device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline);
+        if (hasUsb)
+        {
+            address = "127.0.0.1";
+            info.Port = 5151; // adb forward tcp:5151 tcp:5151
+        }
+
         if (string.IsNullOrEmpty(address))
         {
             logger.Warn($"Cannot mount SFTP for {device.Name}: device address is empty");
@@ -116,15 +124,13 @@ public class SftpFeature(
     public async Task BrowseAsync(PairedDevice device)
     {
         var deviceDirectory = Path.Combine(userSettingsService.GeneralSettingsService.RemoteStoragePath, device.Name);
+        Directory.CreateDirectory(deviceDirectory);
 
         if (!_sessions.TryGetValue(device.Id, out var session))
         {
             logger.Warn($"No active SFTP session for {device.Name} (device ID: {device.Id})");
-            if (Directory.Exists(deviceDirectory))
-            {
-                logger.Info($"Opening existing device directory in File Explorer: {deviceDirectory}");
-                OpenFolderInExplorer(deviceDirectory);
-            }
+            logger.Info($"Opening device directory in File Explorer: {deviceDirectory}");
+            OpenFolderInExplorer(deviceDirectory);
             return;
         }
 
