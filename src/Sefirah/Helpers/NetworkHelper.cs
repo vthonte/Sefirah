@@ -40,5 +40,39 @@ public static class NetworkHelper
             .ToList();
     }
 
+    public static bool IsOnLocalSubnet(string? ipString)
+    {
+        if (string.IsNullOrWhiteSpace(ipString) || !IPAddress.TryParse(ipString.Trim(), out var targetIp))
+            return false;
+
+        if (IPAddress.IsLoopback(targetIp))
+            return true;
+
+        var localAddrs = GetAllValidAddresses();
+        var targetBytes = targetIp.GetAddressBytes();
+        if (targetBytes.Length != 4) return false;
+
+        foreach (var local in localAddrs)
+        {
+            if (local.SubnetMask is null) continue;
+            var localBytes = local.Address.GetAddressBytes();
+            var maskBytes = local.SubnetMask.GetAddressBytes();
+            if (localBytes.Length != 4 || maskBytes.Length != 4) continue;
+
+            bool match = true;
+            for (int i = 0; i < 4; i++)
+            {
+                if ((localBytes[i] & maskBytes[i]) != (targetBytes[i] & maskBytes[i]))
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
+        }
+
+        return false;
+    }
+
     public record IPAddressInfo(IPAddress Address, IPAddress SubnetMask, IPAddress? Gateway, bool IsPhysical = false);
 }

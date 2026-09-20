@@ -32,8 +32,11 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
-        // Configure exception handlers
-        UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.Exception);
+        UnhandledException += (sender, e) =>
+        {
+            AppLifecycleHelper.HandleAppUnhandledException(e.Exception);
+            e.Handled = true;
+        };
         AppDomain.CurrentDomain.UnhandledException += (sender, e) => AppLifecycleHelper.HandleAppUnhandledException(e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (sender, e) =>
         {

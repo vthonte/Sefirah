@@ -92,7 +92,10 @@ public class NetworkService(
 
             if (device.DeviceSettings.AdbAutoConnect)
             {
-                var wifiAddr = device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127."))?.Address;
+                var wifiAddr = (!string.IsNullOrEmpty(device.Address) && !device.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(device.Address))
+                    ? device.Address
+                    : device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(a.Address))?.Address;
+
                 if (!string.IsNullOrEmpty(wifiAddr))
                 {
                     await adbService.TryConnectTcp(wifiAddr, device.Model);
@@ -647,9 +650,22 @@ public class NetworkService(
 
             if (existingDevice.ConnectionStatus.IsConnectedOrConnecting)
             {
-                if (existingDevice.Address == "127.0.0.1" && !address.StartsWith("127."))
+                if (existingDevice.Address == "127.0.0.1")
                 {
-                    logger.Info($"Device {existingDevice.Name} is on USB loopback, but discovered on Wi-Fi {address}:{port}. Connecting Wi-Fi.");
+                    // Device is connected via USB loopback (highest priority). Do not drop or reconnect USB for Wi-Fi discovery.
+                    return;
+                }
+
+                if (existingDevice.Address == address)
+                {
+                    // Already connected to this address.
+                    return;
+                }
+
+                // If currently connected on Wi-Fi, but to an address NOT on our current local subnet:
+                if (!NetworkHelper.IsOnLocalSubnet(existingDevice.Address))
+                {
+                    logger.Info($"Device {existingDevice.Name} was connected to {existingDevice.Address} (stale subnet), switching to {address}:{port}");
                 }
                 else
                 {
@@ -761,8 +777,11 @@ public class NetworkService(
 
         if (connectionCancellationTokens.TryRemove(device.Id, out var removedCts))
         {
-            removedCts.Cancel();
-            removedCts.Dispose();
+            try
+            {
+                removedCts.Cancel();
+            }
+            catch { }
         }
         ConnectCore(device, [address], isManualReconnect: overrideForced);
     }
@@ -779,6 +798,7 @@ public class NetworkService(
 
         var cts = new CancellationTokenSource();
         connectionCancellationTokens[device.Id] = cts;
+        var token = cts.Token;
         await App.MainWindow.DispatcherQueue.EnqueueAsync(() => device.ConnectionStatus = new Connecting());
 
         try
@@ -786,16 +806,29 @@ public class NetworkService(
             var candidateAddresses = addresses.ToList();
             var hasUsbOnline = device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline)
                 || adbService.AdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline && device.IsMatchingAdbDevice(d));
-            if (hasUsbOnline)
+
+            // Only prioritize USB forward tunnel (localhost:5153 -> phone:5150) if USB is online
+            // AND we do not already have an active loopback session established!
+            if (hasUsbOnline && (device.Session is null || device.Address != "127.0.0.1"))
             {
-                // Prioritize USB forward tunnel (localhost:5153 -> phone:5150)
                 candidateAddresses.Remove("127.0.0.1");
                 candidateAddresses.Insert(0, "127.0.0.1");
             }
 
-            foreach (var address in candidateAddresses)
+            // Filter out addresses that are not loopback and not on any active local subnet
+            var validCandidates = candidateAddresses
+                .Where(a => a == "127.0.0.1" || NetworkHelper.IsOnLocalSubnet(a))
+                .Distinct()
+                .ToList();
+
+            if (validCandidates.Count == 0 && candidateAddresses.Count > 0)
             {
-                cts.Token.ThrowIfCancellationRequested();
+                logger.Warn($"No candidate addresses for {device.Name} match the current local network subnet. Available: {string.Join(", ", candidateAddresses)}");
+            }
+
+            foreach (var address in validCandidates)
+            {
+                token.ThrowIfCancellationRequested();
 
                 var clientContext = SslHelper.CreateSslContext(device.Certificate);
                 var targetPort = address == "127.0.0.1" ? 5153 : (device.Port > 0 ? device.Port : 5150);
@@ -815,11 +848,11 @@ public class NetworkService(
 
                     if (!client.IsHandshaked)
                     {
-                        using (cts.Token.Register(() => tcs.TrySetCanceled()))
-                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), cts.Token);
+                        using (token.Register(() => tcs.TrySetCanceled()))
+                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
                     }
 
-                    cts.Token.ThrowIfCancellationRequested();
+                    token.ThrowIfCancellationRequested();
 
                     SendAuthenticationMessage(m => SendMessage(client, m), isManualReconnect);
                     device.Client = client;
@@ -844,6 +877,14 @@ public class NetworkService(
         {
             logger.Info($"Connection attempt cancelled for device {device.Name}");
         }
+        catch (ObjectDisposedException)
+        {
+            logger.Info($"Connection cancellation token disposed for device {device.Name}");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Unexpected error connecting to device {device.Name}", ex);
+        }
         finally
         {
             lock (connectingDeviceIds)
@@ -856,10 +897,7 @@ public class NetworkService(
                 await App.MainWindow.DispatcherQueue.EnqueueAsync(() => device.ConnectionStatus = new Disconnected());
             }
 
-            if (connectionCancellationTokens.TryRemove(device.Id, out var cancellationTokenSource))
-            {
-                cancellationTokenSource.Dispose();
-            }
+            connectionCancellationTokens.TryRemove(device.Id, out _);
         }
     }
 

@@ -9,6 +9,7 @@ using AdvancedSharpAdbClient.Receivers;
 using CommunityToolkit.WinUI;
 using Sefirah.Data.Items;
 using Sefirah.Data.Models;
+using Sefirah.Helpers;
 
 namespace Sefirah.Services;
 
@@ -754,8 +755,14 @@ public class AdbService(
         if (string.IsNullOrWhiteSpace(host) || host.Trim().StartsWith("127.") || host.Trim().Equals("localhost", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        const int port = 5555;
         var cleanHost = host.Trim();
+        if (!NetworkHelper.IsOnLocalSubnet(cleanHost))
+        {
+            logger.Debug($"Skipping TryConnectTcp for {cleanHost} as it is not on any local subnet");
+            return false;
+        }
+
+        const int port = 5555;
 
         try
         {
@@ -900,38 +907,37 @@ public class AdbService(
             var adbPath = userSettingsService.GeneralSettingsService.AdbPath;
             if (string.IsNullOrEmpty(adbPath)) return;
 
-            // Find device IP: first check paired devices (excluding loopback)
-            string targetIp = string.Empty;
             var pairedDevice = deviceManager.PairedDevices.FirstOrDefault(pd => pd.IsMatchingAdbDevice(usbDevice));
-            if (pairedDevice is not null)
+            if (pairedDevice is not null && !pairedDevice.DeviceSettings.AdbAutoConnect)
             {
-                if (!pairedDevice.DeviceSettings.AdbAutoConnect)
-                {
-                    logger.Debug($"AdbAutoConnect disabled for {usbDevice.Serial}, skipping auto wireless setup");
-                    return;
-                }
+                logger.Debug($"AdbAutoConnect disabled for {usbDevice.Serial}, skipping auto wireless setup");
+                return;
+            }
 
-                if (!string.IsNullOrEmpty(pairedDevice.Address) && !pairedDevice.Address.StartsWith("127."))
+            // Query IP directly from Android via adb shell first as it is 100% current
+            string targetIp = await GetDeviceIpAddressAsync(usbDevice.DeviceData);
+
+            // If shell query didn't return an IP on the local subnet, fallback to paired device
+            if (string.IsNullOrEmpty(targetIp) || !NetworkHelper.IsOnLocalSubnet(targetIp))
+            {
+                if (pairedDevice is not null)
                 {
-                    targetIp = pairedDevice.Address;
-                }
-                else
-                {
-                    var wifiAddr = pairedDevice.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127."));
-                    if (wifiAddr is not null)
-                        targetIp = wifiAddr.Address;
+                    if (!string.IsNullOrEmpty(pairedDevice.Address) && !pairedDevice.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(pairedDevice.Address))
+                    {
+                        targetIp = pairedDevice.Address;
+                    }
+                    else
+                    {
+                        var wifiAddr = pairedDevice.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(a.Address));
+                        if (wifiAddr is not null)
+                            targetIp = wifiAddr.Address;
+                    }
                 }
             }
 
-            // If not found from paired device, query IP directly from Android via adb shell
-            if (string.IsNullOrEmpty(targetIp) || targetIp.StartsWith("127."))
+            if (string.IsNullOrEmpty(targetIp) || targetIp.StartsWith("127.") || !NetworkHelper.IsOnLocalSubnet(targetIp))
             {
-                targetIp = await GetDeviceIpAddressAsync(usbDevice.DeviceData);
-            }
-
-            if (string.IsNullOrEmpty(targetIp) || targetIp.StartsWith("127."))
-            {
-                logger.Debug($"Could not determine Wi-Fi IP address for USB device {usbDevice.Serial}, skipping auto wireless setup");
+                logger.Debug($"Could not determine valid Wi-Fi IP address on current subnet for USB device {usbDevice.Serial}, skipping auto wireless setup");
                 return;
             }
 

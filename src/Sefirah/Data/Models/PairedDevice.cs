@@ -61,11 +61,27 @@ public partial class PairedDevice : BaseRemoteDevice
         if (Addresses.Any(a => a.Address.Equals(address, StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        Addresses.Add(new AddressEntry
+        var entry = new AddressEntry
         {
             Address = address,
             IsEnabled = true
-        });
+        };
+
+        var dispatcher = App.MainWindow?.DispatcherQueue;
+        if (dispatcher is not null && !dispatcher.HasThreadAccess)
+        {
+            dispatcher.TryEnqueue(() =>
+            {
+                if (!Addresses.Any(a => a.Address.Equals(address, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Addresses.Add(entry);
+                }
+            });
+        }
+        else
+        {
+            Addresses.Add(entry);
+        }
         return true;
     }
 

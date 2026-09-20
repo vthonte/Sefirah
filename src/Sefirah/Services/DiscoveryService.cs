@@ -99,7 +99,13 @@ public class DiscoveryService(
         endpoints.Add(new IPEndPoint(IPAddress.Parse(DEFAULT_BROADCAST), DiscoveryPort));
 
         var addresses = deviceManager.GetRemoteDeviceAddresses();
-        endpoints.AddRange(addresses.Select(address => new IPEndPoint(IPAddress.Parse(address), DiscoveryPort)));
+        foreach (var address in addresses)
+        {
+            if (IPAddress.TryParse(address, out var parsedIp))
+            {
+                endpoints.Add(new IPEndPoint(parsedIp, DiscoveryPort));
+            }
+        }
 
         broadcastEndpoints = endpoints.Distinct().ToList();
         logger.Info($"Active broadcast endpoints: {string.Join(", ", broadcastEndpoints)}");
@@ -144,6 +150,31 @@ public class DiscoveryService(
             logger.Info("Network change detected. Refreshing broadcast endpoints and re-advertising discovery...");
             UpdateBroadcastEndpoints();
 
+            // Rebind and reconnect UDP client if needed
+            if (udpClient is null || !udpClient.IsConnected || udpClient.IsSocketDisposed)
+            {
+                try
+                {
+                    udpClient?.Disconnect();
+                    udpClient?.Dispose();
+                }
+                catch { }
+
+                udpClient = new MulticastClient("0.0.0.0", port, this, logger)
+                {
+                    OptionDualMode = false,
+                    OptionMulticast = true,
+                    OptionReuseAddress = true,
+                };
+                udpClient.SetupMulticast(true);
+
+                if (udpClient.Connect())
+                {
+                    udpClient.Socket.EnableBroadcast = true;
+                    logger.Info($"UDP Client reconnected on network change {port}");
+                }
+            }
+
             if (BroadcastMessage is not null)
             {
                 BroadcastMessage.Port = NetworkService.ServerPort;
@@ -152,14 +183,30 @@ public class DiscoveryService(
                 BroadcastDeviceInfoAsync(BroadcastMessage);
             }
 
-            // If any paired device is not connected or only on USB loopback, attempt auto-connect to Wi-Fi
+            // Check paired devices
             foreach (var device in deviceManager.PairedDevices)
             {
                 if (device.IsForcedDisconnect) continue;
-                if (!device.IsConnected || device.Address == "127.0.0.1")
+
+                // If device is connected via Wi-Fi but its address is NOT on our current local subnet,
+                // that connection is dead. Disconnect it so it can reconnect to the new IP.
+                if (device.IsConnected && !string.IsNullOrEmpty(device.Address) && device.Address != "127.0.0.1")
                 {
-                    var wifiAddrs = device.Addresses.Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.")).ToList();
-                    if (wifiAddrs.Count > 0)
+                    if (!NetworkHelper.IsOnLocalSubnet(device.Address))
+                    {
+                        logger.Info($"Device {device.Name} is on stale subnet IP {device.Address}. Disconnecting stale connection.");
+                        sessionManager.DisconnectDevice(device);
+                    }
+                }
+
+                // If device is not connected, attempt auto-connect to Wi-Fi addresses matching current subnet
+                if (!device.IsConnected)
+                {
+                    var validWifiAddrs = device.Addresses
+                        .Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(a.Address))
+                        .ToList();
+
+                    if (validWifiAddrs.Count > 0)
                     {
                         logger.Info($"Network changed: attempting Wi-Fi connection for {device.Name}");
                         sessionManager.Connect(device);
