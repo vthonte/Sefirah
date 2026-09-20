@@ -169,7 +169,7 @@ public class DiscoveryService(
                 DeviceName = broadcast.DeviceName
             };
             var json = JsonMessageSerializer.Serialize(payload);
-            var deepLink = $"sefirah://pair?data={Uri.EscapeDataString(json)}";
+            var deepLink = $"{Constants.AppInfo.ProtocolScheme}://pair?data={Uri.EscapeDataString(json)}";
             logger.Info($"Generated QR pairing deepLink for {payload.DeviceName} (IP: {addresses.FirstOrDefault()}:{payload.Port})");
 
             var qrCodeBytes = ImageHelper.GenerateQrCode(deepLink);

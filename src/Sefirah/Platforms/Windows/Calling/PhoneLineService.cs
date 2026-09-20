@@ -4,6 +4,7 @@ using Sefirah.Data.Models;
 using Sefirah.Platforms.Windows.Bluetooth;
 using Sefirah.Platforms.Windows.Utilities;
 using Windows.ApplicationModel.Calls;
+using Windows.Devices.Bluetooth;
 using Windows.Devices.Enumeration;
 using Windows.Devices.Radios;
 
@@ -300,6 +301,30 @@ public sealed class PhoneLineService(
             if (!await pltDevice.ConnectAsync())
             {
                 logger.Warn($"ConnectAsync returned false for {transportDeviceId}");
+
+                var classicId = ActiveDevice?.BluetoothClassicDeviceId;
+                if (!string.IsNullOrEmpty(classicId))
+                {
+                    try
+                    {
+                        var bt = await BluetoothDevice.FromIdAsync(classicId);
+                        if (bt is not null)
+                        {
+                            await bt.GetRfcommServicesAsync(BluetoothCacheMode.Uncached);
+                            if (await pltDevice.ConnectAsync())
+                            {
+                                logger.Info($"ConnectAsync succeeded on retry for {transportDeviceId}");
+                                var retryLine = FindLineByTransport(transportDeviceId);
+                                if (retryLine is not null) return CallingLineStatus.Ready;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Debug($"Wakeup retry failed for {transportDeviceId}: {ex.Message}");
+                    }
+                }
+
                 return CallingLineStatus.NotLinked;
             }
 

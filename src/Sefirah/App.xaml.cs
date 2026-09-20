@@ -50,7 +50,7 @@ public partial class App : Application
         {
             var builder = this.ConfigureApp(args);
             MainWindow = builder.Window;
-            MainWindow.AppWindow.Title = "Sefirah AI";
+            MainWindow.AppWindow.Title = Constants.AppInfo.Name;
             MainWindow.SetWindowIcon();
             if (MainWindow.AppWindow.Presenter is OverlappedPresenter presenter)
             {

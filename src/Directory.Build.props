@@ -11,5 +11,11 @@
       PRI257: Ignore default language (en) not being one of the included resources (eg en-us, en-uk)
     -->
     <NoWarn>$(NoWarn);NU1507;NETSDK1201;PRI257</NoWarn>
+
+    <!-- Central Dynamic Application Branding -->
+    <AppName Condition="'$(AppName)' == ''">Sefirah AI</AppName>
+    <AppTitle Condition="'$(AppTitle)' == ''">Sefirah AI</AppTitle>
+    <AppDescription Condition="'$(AppDescription)' == ''">Sefirah AI: Seamless cross-device intelligence.</AppDescription>
+    <AppId Condition="'$(AppId)' == ''">vthonte.Sefirah-AI</AppId>
   </PropertyGroup>
 </Project>

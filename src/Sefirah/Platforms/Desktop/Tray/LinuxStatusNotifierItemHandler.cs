@@ -29,8 +29,8 @@ internal sealed class LinuxStatusNotifierItemHandler : DBusHandler, IStatusNotif
     public event EventHandler? Activated;
 
     string IStatusNotifierItemProperties.Category => "ApplicationStatus";
-    string IStatusNotifierItemProperties.Id => "Sefirah";
-    string IStatusNotifierItemProperties.Title => "Sefirah";
+    string IStatusNotifierItemProperties.Id => Constants.AppInfo.Name;
+    string IStatusNotifierItemProperties.Title => Constants.AppInfo.Name;
     string IStatusNotifierItemProperties.Status => StatusActive;
     int IStatusNotifierItemProperties.WindowId => 0;
     string IStatusNotifierItemProperties.IconThemePath => "";

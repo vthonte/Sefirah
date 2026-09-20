@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Sefirah.Data.Models;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Enumeration;
@@ -72,7 +73,6 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
         }
     }
 
-    // this doesn't do anything now but can be useful
     public Task RefreshAsync()
     {
         if (!IsBluetoothSupported)
@@ -87,7 +87,10 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
             pairedWatcher.Removed -= OnPairedRemoved;
         }
 
-        pairedWatcher = DeviceInformation.CreateWatcher(BluetoothDevice.GetDeviceSelectorFromPairingState(true), [AepDeviceAddressKey], DeviceInformationKind.AssociationEndpoint);
+        pairedWatcher = DeviceInformation.CreateWatcher(
+            BluetoothDevice.GetDeviceSelectorFromPairingState(true),
+            [AepDeviceAddressKey, "System.ItemNameDisplay"],
+            DeviceInformationKind.AssociationEndpoint);
         pairedWatcher.Added += OnPairedAdded;
         pairedWatcher.Updated += OnPairedUpdated;
         pairedWatcher.Removed += OnPairedRemoved;
@@ -112,7 +115,10 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
         if (unpairedWatcher is null)
         {
             unpairedDevices.Clear();
-            unpairedWatcher = DeviceInformation.CreateWatcher(BluetoothDevice.GetDeviceSelectorFromPairingState(false), [AepDeviceAddressKey]);
+            unpairedWatcher = DeviceInformation.CreateWatcher(
+                BluetoothDevice.GetDeviceSelectorFromPairingState(false),
+                [AepDeviceAddressKey, "System.ItemNameDisplay"],
+                DeviceInformationKind.AssociationEndpoint);
             unpairedWatcher.Added += OnUnpairedAdded;
             unpairedWatcher.Updated += OnUnpairedUpdated;
             unpairedWatcher.Removed += OnUnpairedRemoved;
@@ -136,6 +142,7 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
 
     private void OnUnpairedAdded(DeviceWatcher sender, DeviceInformation args)
     {
+        logger.Debug($"Unpaired candidate added: '{args.Name}' ({args.Id})");
         unpairedDevices[args.Id] = args;
         TrySignalMatchIfTargetPhone(args);
     }
@@ -155,34 +162,130 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
         var tcs = matchTcs;
         if (phone is null || tcs is null) return;
 
-        if (string.IsNullOrWhiteSpace(candidate.Name)) return;
-        var win = Normalize(candidate.Name);
-        if (string.IsNullOrEmpty(win)) return;
-
-        foreach (var label in MatchLabels(phone))
+        if (IsMatchingDevice(phone, candidate))
         {
-            var n = Normalize(label);
-            if (n is null) continue;
-            if (string.Equals(n, win, StringComparison.OrdinalIgnoreCase) ||
-                n.Contains(win, StringComparison.OrdinalIgnoreCase) ||
-                win.Contains(n, StringComparison.OrdinalIgnoreCase))
+            logger.Info($"Matched candidate device: '{candidate.Name}' ({candidate.Id}) for target phone '{phone.Name}'");
+            tcs.TrySetResult(candidate);
+        }
+    }
+
+    private bool IsMatchingDevice(PairedDevice phone, DeviceInformation candidate)
+    {
+        var candidateName = candidate.Name;
+        if (string.IsNullOrWhiteSpace(candidateName) &&
+            candidate.Properties.TryGetValue("System.ItemNameDisplay", out var itemName) &&
+            itemName is string s && !string.IsNullOrWhiteSpace(s))
+        {
+            candidateName = s;
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidateName))
+        {
+            var win = Normalize(candidateName);
+            if (!string.IsNullOrEmpty(win))
             {
-                tcs.TrySetResult(candidate);
+                foreach (var label in MatchLabels(phone))
+                {
+                    var n = Normalize(label);
+                    if (n is null) continue;
+                    if (string.Equals(n, win, StringComparison.OrdinalIgnoreCase) ||
+                        n.Contains(win, StringComparison.OrdinalIgnoreCase) ||
+                        win.Contains(n, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
             }
         }
+
+        // Also check by Bluetooth address
+        var candidateAddr = GetBluetoothAddress(candidate);
+        var targetMac = phone.BluetoothAddress;
+        if (string.IsNullOrEmpty(targetMac) && !string.IsNullOrEmpty(phone.CallsTransportDeviceId))
+        {
+            var match = Regex.Match(phone.CallsTransportDeviceId, @"([0-9A-Fa-f]{12})");
+            if (match.Success)
+            {
+                targetMac = match.Groups[1].Value;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(candidateAddr) && !string.IsNullOrEmpty(targetMac))
+        {
+            var cAddr = candidateAddr.Replace(":", string.Empty).Trim();
+            var pAddr = targetMac.Replace(":", string.Empty).Trim();
+            if (string.Equals(cAddr, pAddr, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<DeviceInformation?> FindMatchingPairedDeviceAsync(PairedDevice phone, CancellationToken cancellationToken)
+    {
+        // 1. Check in-memory paired devices cache
+        foreach (var dev in pairedDevicesById.Values)
+        {
+            if (IsMatchingDevice(phone, dev))
+                return dev;
+        }
+
+        // 2. Query Windows DeviceInformation for paired Bluetooth devices
+        try
+        {
+            var pairedSelector = BluetoothDevice.GetDeviceSelectorFromPairingState(true);
+            var paired = await DeviceInformation.FindAllAsync(
+                pairedSelector,
+                [AepDeviceAddressKey, "System.ItemNameDisplay"]
+            ).AsTask(cancellationToken);
+
+            foreach (var dev in paired)
+            {
+                pairedDevicesById[dev.Id] = dev;
+                if (IsMatchingDevice(phone, dev))
+                    return dev;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Warn("Error querying paired Bluetooth devices", ex);
+        }
+
+        return null;
     }
 
     private async Task<bool> WaitForUnpairedDeviceAsync(CancellationToken cancellationToken)
     {
         matchTcs = new TaskCompletionSource<DeviceInformation?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Check if any existing cached devices match
+        if (scanTargetPhone is not null)
+        {
+            foreach (var dev in unpairedDevices.Values.Concat(pairedDevicesById.Values))
+            {
+                if (IsMatchingDevice(scanTargetPhone, dev))
+                {
+                    logger.Info($"Immediate match found in cached devices: '{dev.Name}' ({dev.Id})");
+                    lastDiscoveredDevice = dev;
+                    return true;
+                }
+            }
+        }
+
         StartUnpairedWatcher();
 
         var matchTask = matchTcs.Task;
-        var completedTask = await Task.WhenAny(matchTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+        var completedTask = await Task.WhenAny(matchTask, Task.Delay(TimeSpan.FromSeconds(30), cancellationToken));
 
         if (completedTask != matchTask)
         {
-            logger.Debug("WaitForUnpairedDeviceAsync timed out");
+            logger.Debug("WaitForUnpairedDeviceAsync timed out after 30 seconds");
             State = new(BluetoothPairingStep.Discovery, BluetoothPairingStatus.DeviceNotFound);
             return false;
         }
@@ -210,17 +313,38 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
             return false;
         }
 
-
         try
         {
             State = new(BluetoothPairingStep.Discovery, BluetoothPairingStatus.InProgress);
             scanTargetPhone = phone;
+
+            await RefreshAsync();
+
+            // 1. Check if the target device is already paired in Windows
+            var existingPaired = await FindMatchingPairedDeviceAsync(phone, cancellationToken);
+            if (existingPaired is not null)
+            {
+                logger.Info($"Found already-paired Bluetooth device '{existingPaired.Name}' ({existingPaired.Id}) for {phone.Name}");
+                lastDiscoveredDevice = existingPaired;
+                State = new(BluetoothPairingStep.Ready, BluetoothPairingStatus.Success);
+                return true;
+            }
 
             var granted = await RequestBluetoothDiscoveryAsync(phone, cancellationToken).ConfigureAwait(false);
             if (!granted)
             {
                 State = new(BluetoothPairingStep.Discovery, BluetoothPairingStatus.PhoneDiscoveryRequestDenied);
                 return false;
+            }
+
+            // 2. Check paired devices again in case phone's Bluetooth name was reported back
+            existingPaired = await FindMatchingPairedDeviceAsync(phone, cancellationToken);
+            if (existingPaired is not null)
+            {
+                logger.Info($"Found paired Bluetooth device '{existingPaired.Name}' after request for {phone.Name}");
+                lastDiscoveredDevice = existingPaired;
+                State = new(BluetoothPairingStep.Ready, BluetoothPairingStatus.Success);
+                return true;
             }
 
             return await WaitForUnpairedDeviceAsync(cancellationToken).ConfigureAwait(false);
@@ -381,6 +505,7 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
     private void OnPairedAdded(DeviceWatcher sender, DeviceInformation args)
     {
         pairedDevicesById.TryAdd(args.Id, args);
+        TrySignalMatchIfTargetPhone(args);
     }
 
     private void OnPairedUpdated(DeviceWatcher sender, DeviceInformationUpdate args)
@@ -388,6 +513,7 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
         if (pairedDevicesById.TryGetValue(args.Id, out var existing))
         {
             existing.Update(args);
+            TrySignalMatchIfTargetPhone(existing);
         }
     }
 
@@ -413,6 +539,24 @@ public sealed partial class BluetoothPairingService : IBluetoothPairingService, 
         if (d.Properties.TryGetValue(AepDeviceAddressKey, out var o) && o is string s && !string.IsNullOrWhiteSpace(s))
         {
             addr = s.Trim();
+        }
+
+        if (string.IsNullOrEmpty(addr) && !string.IsNullOrWhiteSpace(d.Id))
+        {
+            var match = Regex.Match(d.Id, @"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})");
+            if (match.Success)
+            {
+                addr = match.Value;
+            }
+            else
+            {
+                var hexMatch = Regex.Match(d.Id, @"DEV_([0-9A-Fa-f]{12})");
+                if (hexMatch.Success)
+                {
+                    var h = hexMatch.Groups[1].Value;
+                    addr = $"{h[0..2]}:{h[2..4]}:{h[4..6]}:{h[6..8]}:{h[8..10]}:{h[10..12]}";
+                }
+            }
         }
 
         return addr;

@@ -1,6 +1,13 @@
 namespace Sefirah;
 public static class Constants
 {
+    public static class AppInfo
+    {
+        public const string Name = "Sefirah AI";
+        public const string Tagline = "Seamless cross-device intelligence";
+        public const string ProtocolScheme = "sefirah-ai";
+        public const string LegacyProtocolScheme = "sefirah";
+    }
     public static class BatteryAlerts
     {
         public const int DefaultThreshold = 20;

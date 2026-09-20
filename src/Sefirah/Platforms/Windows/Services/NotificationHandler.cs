@@ -24,12 +24,19 @@ public class NotificationHandler(
     {
         try
         {
+            var tag = !string.IsNullOrEmpty(message.NotificationKey)
+                ? (message.NotificationKey.Length > 64 ? message.NotificationKey[..64] : message.NotificationKey)
+                : (message.Tag ?? string.Empty);
+            var group = !string.IsNullOrEmpty(message.AppPackage)
+                ? (message.AppPackage.Length > 64 ? message.AppPackage[..64] : message.AppPackage)
+                : (message.GroupKey ?? string.Empty);
+
             var builder = new AppNotificationBuilder()
                 .AddText(message.AppName, new AppNotificationTextProperties().SetMaxLines(1))
                 .AddText(message.Title)
                 .AddText(message.Text)
-                .SetTag(message.Tag ?? string.Empty)
-                .SetGroup(message.GroupKey ?? string.Empty);
+                .SetTag(tag)
+                .SetGroup(group);
 
             if (!string.IsNullOrEmpty(message.LargeIcon))
             {

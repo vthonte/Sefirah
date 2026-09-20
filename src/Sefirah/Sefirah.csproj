@@ -6,16 +6,16 @@
         <UnoSingleProject>true</UnoSingleProject>
 
         <!-- Display name -->
-        <ApplicationTitle>Sefirah AI</ApplicationTitle>
+        <ApplicationTitle>$(AppTitle)</ApplicationTitle>
         <!-- App Identifier -->
-        <ApplicationId>com.sefirah.ai</ApplicationId>
+        <ApplicationId>$(AppId)</ApplicationId>
         <!-- Versions -->
         <ApplicationDisplayVersion>3.2.1</ApplicationDisplayVersion>
         <ApplicationVersion>13</ApplicationVersion>
         <!-- Package Publisher -->
         <ApplicationPublisher>vthonte</ApplicationPublisher>
         <!-- Package Description -->
-        <Description>Sefirah AI powered by Uno Platform.</Description>
+        <Description>$(AppDescription)</Description>
         <!--
             If you encounter this error message:
 
@@ -141,8 +141,12 @@
     </ItemGroup>
 
     <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100'">
-        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" VersionOverride="10.0.28000.2526" />
+        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" VersionOverride="10.0.28000.2526" GeneratePathProperty="true" />
         <PackageReference Include="Microsoft.WindowsAppSDK" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(Configuration)' == 'Release'">
+        <PackageReference Remove="Uno.WinUI.DevServer" />
     </ItemGroup>
 
     <ItemGroup>
@@ -163,6 +167,12 @@
     <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100' and '$(SefirahMrmSupportDll)' == '' and Exists('C:\Program Files\Windows Kits\10\bin\$(SefirahMrmSupportSdkVersion)\$(SefirahMrmSupportSdkArch)\mrmsupport.dll')">
         <SefirahMrmSupportDll>C:\Program Files\Windows Kits\10\bin\$(SefirahMrmSupportSdkVersion)\$(SefirahMrmSupportSdkArch)\mrmsupport.dll</SefirahMrmSupportDll>
     </PropertyGroup>
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100' and '$(SefirahMrmSupportDll)' == '' and '$(PkgMicrosoft_Windows_SDK_BuildTools)' != '' and Exists('$(PkgMicrosoft_Windows_SDK_BuildTools)\bin\10.0.28000.0\$(SefirahMrmSupportSdkArch)\mrmsupport.dll')">
+        <SefirahMrmSupportDll>$(PkgMicrosoft_Windows_SDK_BuildTools)\bin\10.0.28000.0\$(SefirahMrmSupportSdkArch)\mrmsupport.dll</SefirahMrmSupportDll>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100' and '$(SefirahMrmSupportDll)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\tools\$(SefirahMrmSupportSdkArch)\mrmsupport.dll')">
+        <SefirahMrmSupportDll>$(MSBuildThisFileDirectory)..\..\tools\$(SefirahMrmSupportSdkArch)\mrmsupport.dll</SefirahMrmSupportDll>
+    </PropertyGroup>
     <Target Name="IncludeMrmSupportDll" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' == 'net10.0-windows10.0.26100' and '$(Platform)' != 'Any CPU'">
         <Error Condition="'$(SefirahMrmSupportDll)' == '' or !Exists('$(SefirahMrmSupportDll)')" Text="Windows SDK mrmsupport.dll was not found. Install the Windows SDK or set SefirahMrmSupportDll." />
         <ItemGroup>
@@ -172,4 +182,7 @@
             </Content>
         </ItemGroup>
     </Target>
+
+    <!-- In Release builds, override ValidateDevServerConfiguration so UNOB0019 does not block optimized builds -->
+    <Target Name="ValidateDevServerConfiguration" BeforeTargets="CoreCompile" Condition="'$(Optimize)' == 'true'" />
 </Project>
