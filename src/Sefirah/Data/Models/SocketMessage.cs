@@ -72,6 +72,7 @@ public class Authentication : SocketMessage
     public required string PublicKey { get; set; }
 
     public required string Model { get; set; }
+    public bool IsManualReconnect { get; set; } = false;
 }
 
 public class PairMessage : SocketMessage

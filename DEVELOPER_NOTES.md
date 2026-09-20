@@ -175,8 +175,32 @@ Matching order:
 - A 10-second periodic UDP broadcast loop runs on both sides to discover network IPs rapidly.
 - When connected via USB (`127.0.0.1`) and discovered on Wi-Fi, the connection is seamlessly upgraded to the Wi-Fi IP so wireless ADB and all network features activate without delay.
 
-### Mutual Manual Disconnect Override
-- When a user manually disconnects from either device, automatic background reconnection pauses to respect the user's intent (`IsForcedDisconnect = true`).
-- Either device can override this disconnect at any time:
-  - Clicking **Connect** or **Refresh** on Laptop overrides `forcedDisconnect` and connects to Phone without touching Phone, updating both devices to **Connected**.
-  - Tapping **Connect** or **Sync** on Phone overrides `forcedDisconnect` and connects to Laptop without touching Laptop, updating both devices to **Connected**.
+### Mutual Manual Disconnect Override & Protocol Architecture
+1. **The Core Issue with Auto-Reconnection**:
+   - Previously, clicking Disconnect on PC simply closed the socket without sending a `Disconnect` packet. Android received socket EOF (`onClose`), which reset Android's connection state to `Disconnected(forcedDisconnect = false)`.
+   - Android's background probe loops (`probeUsbDevice`, `probePairedDevices`, UDP broadcasts) immediately saw `isForcedDisconnect == false` and re-established the TLS socket within 1 second.
+   - Conversely, Android's `disconnect()` launched an asynchronous coroutine to send `Disconnect`, and immediately cancelled the coroutine scope and closed the socket before bytes flushed to the network.
+   - Furthermore, `PairedDevice.IsConnected` on PC returned `ConnectionStatus.IsConnected || HasAdbConnection`. Because physical USB was plugged in (`HasAdbConnection == true`), Desktop UI considered the device perpetually connected, hiding the Connect button and breaking the disconnect UX.
+
+2. **Clean Disconnect Protocol**:
+   - **PC -> Phone**: When user clicks Disconnect in Desktop UI, Desktop synchronously sends `new Disconnect()` over `Session.Send()` or `Client.Send()` before calling `DisconnectSession`/`DisconnectClient`. PC marks `ConnectionStatus = new Disconnected(forcedDisconnect: true)`.
+   - **Phone -> PC**: When user taps Disconnect in Android app, Android calls `connections[id]?.sendMessageSync(Disconnect)` using a synchronous mutex lock and stream flush before tearing down the connection, marking `connectionState = ConnectionState.Disconnected(forcedDisconnect = true)`.
+   - **Involuntary Socket Drop Preservation**: In both Android's `onClose` and PC's `SetDisconnected`, the forced-disconnect status is preserved:
+     `val isForced = forcedDisconnect || device.connectionState.isForcedDisconnect`.
+     A network drop or socket close will **never** clear a user's intentional forced disconnect!
+   - **Desktop UI State Fix**: In `PairedDevice.cs`:
+     `IsConnected => (ConnectionStatus.IsConnected || HasAdbConnection) && !IsForcedDisconnect;`
+     `IsDisconnected => (ConnectionStatus.IsDisconnected && !HasAdbConnection) || IsForcedDisconnect;`
+     `ConnectionStatusText => IsForcedDisconnect ? "Disconnected" : ...`
+     When forced disconnected, the device shows "Disconnected" and the flyout displays the "Connect" button even if the physical USB cable is plugged in.
+
+3. **Mutual Manual Reconnect Override Handshake**:
+   - While `isForcedDisconnect == true`, all background probes (USB probe, UDP broadcast, mDNS) are suppressed and rejected by both sides.
+   - When the user explicitly clicks **Connect** or **Refresh** on Laptop:
+     - Laptop resets `IsForcedDisconnect = false` and initiates connection with `IsManualReconnect = true` in the `Authentication` payload.
+     - Phone's TLS server receives `Authentication(isManualReconnect = true)`.
+     - Phone recognizes this as an intentional manual reconnect, clears `isForcedDisconnect`, and transitions to `Connected`.
+   - When the user explicitly taps **Connect** or **Sync** on Phone:
+     - Phone sets `isManualReconnect = true` in its `Authentication` payload.
+     - Laptop receives the incoming connection, sees `authMessage.IsManualReconnect == true`, clears `IsForcedDisconnect`, and transitions to `Connected`.
+   - Result: Users can disconnect from either device, and reconnect from either device at any time, with zero manual intervention on the other device.

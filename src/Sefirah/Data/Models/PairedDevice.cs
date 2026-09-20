@@ -115,6 +115,11 @@ public partial class PairedDevice : BaseRemoteDevice
     {
         get
         {
+            if (IsForcedDisconnect)
+            {
+                return "Disconnected.Text".GetLocalizedResource();
+            }
+
             if (ConnectionStatus is Connected)
             {
                 return "Connected.Text".GetLocalizedResource();
@@ -134,11 +139,11 @@ public partial class PairedDevice : BaseRemoteDevice
             };
         }
     }
-    public bool IsDisconnected => ConnectionStatus.IsDisconnected && !HasAdbConnection;
-    public bool IsConnected => ConnectionStatus.IsConnected || HasAdbConnection;
+    public bool IsDisconnected => (ConnectionStatus.IsDisconnected && !HasAdbConnection) || IsForcedDisconnect;
+    public bool IsConnected => (ConnectionStatus.IsConnected || HasAdbConnection) && !IsForcedDisconnect;
     public bool IsForcedDisconnect => ConnectionStatus.IsForcedDisconnect;
-    public bool IsConnecting => ConnectionStatus.IsConnecting && !HasAdbConnection;
-    public bool IsConnectedOrConnecting => ConnectionStatus.IsConnectedOrConnecting || HasAdbConnection;
+    public bool IsConnecting => ConnectionStatus.IsConnecting && !HasAdbConnection && !IsForcedDisconnect;
+    public bool IsConnectedOrConnecting => (ConnectionStatus.IsConnectedOrConnecting || HasAdbConnection) && !IsForcedDisconnect;
 
     private BatteryState? batteryStatus;
     public BatteryState? BatteryStatus

@@ -117,13 +117,37 @@ public class NetworkService(
 
     public void DisconnectDevice(PairedDevice device, bool forcedDisconnect = false)
     {
+        if (forcedDisconnect)
+        {
+            try
+            {
+                var bytes = EncodeMessage(new Disconnect());
+                if (device.Session is not null)
+                {
+                    device.Session.Send(bytes);
+                }
+                else if (device.Client is not null)
+                {
+                    device.Client.Send(bytes);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Warn($"Failed to send Disconnect message to {device.Name}: {ex.Message}");
+            }
+        }
+
         if (device.Session is not null)
         {
-            DisconnectSession(device.Session, true);
+            DisconnectSession(device.Session, forcedDisconnect);
         }
         else if (device.Client is not null)
         {
-            DisconnectClient(device.Client, true);
+            DisconnectClient(device.Client, forcedDisconnect);
+        }
+        else if (forcedDisconnect)
+        {
+            SetDisconnected(device, true);
         }
     }
 
@@ -200,7 +224,7 @@ public class NetworkService(
         return messages;
     }
 
-    public async void SendAuthenticationMessage(Action<SocketMessage> send)
+    public async void SendAuthenticationMessage(Action<SocketMessage> send, bool isManualReconnect = false)
     {
         var localDevice = await deviceManager.GetLocalDeviceAsync();
 
@@ -209,7 +233,8 @@ public class NetworkService(
             DeviceId = localDevice.DeviceId,
             DeviceName = localDevice.DeviceName,
             PublicKey = SslHelper.DevicePublicKeyString,
-            Model = Environment.MachineName
+            Model = Environment.MachineName,
+            IsManualReconnect = isManualReconnect
         };
 
         send(authResponse);
@@ -378,7 +403,7 @@ public class NetworkService(
                 {
                     throw new Exception("Certificate verification failed for paired device");
                 }
-                await AuthenticatePairedDeviceClient(session, pairedDevice, address, cancellationToken);
+                await AuthenticatePairedDeviceClient(session, pairedDevice, address, cancellationToken, authMessage.IsManualReconnect);
                 return;
             }
 
@@ -395,8 +420,26 @@ public class NetworkService(
         }
     }
 
-    private async Task AuthenticatePairedDeviceClient(ServerSession session, PairedDevice pairedDevice, string address, CancellationToken cancellationToken)
+    private async Task AuthenticatePairedDeviceClient(ServerSession session, PairedDevice pairedDevice, string address, CancellationToken cancellationToken, bool isManualReconnect = false)
     {
+        if (pairedDevice.IsForcedDisconnect)
+        {
+            if (isManualReconnect)
+            {
+                logger.Info($"Paired device {pairedDevice.Name} manual reconnect requested from phone, overriding forced disconnect");
+                await App.MainWindow.DispatcherQueue.EnqueueAsync(() =>
+                {
+                    pairedDevice.ConnectionStatus = new Disconnected(forcedDisconnect: false);
+                });
+            }
+            else
+            {
+                logger.Info($"Rejecting incoming auto-connection from {pairedDevice.Name} because device is manually disconnected on this PC");
+                DisconnectSession(session);
+                return;
+            }
+        }
+
         logger.Info($"Paired device {pairedDevice.Name} verified, updating connection");
 
         if (pairedDevice.IsConnected && pairedDevice.Session is not null)
@@ -574,8 +617,9 @@ public class NetworkService(
     {
         try
         {
+            var isForced = forcedDisconnect || device.IsForcedDisconnect;
             await App.MainWindow.DispatcherQueue.EnqueueAsync(() =>
-                device.ConnectionStatus = new Disconnected(forcedDisconnect));
+                device.ConnectionStatus = new Disconnected(isForced));
             ConnectionStatusChanged?.Invoke(this, device);
         }
         catch (Exception ex)
@@ -705,7 +749,7 @@ public class NetworkService(
             return;
         }
 
-        ConnectCore(device, device.GetEnabledAddresses());
+        ConnectCore(device, device.GetEnabledAddresses(), isManualReconnect: overrideForced);
     }
 
     public void Connect(PairedDevice device, string address, bool overrideForced = false)
@@ -720,10 +764,10 @@ public class NetworkService(
             removedCts.Cancel();
             removedCts.Dispose();
         }
-        ConnectCore(device, [address]);
+        ConnectCore(device, [address], isManualReconnect: overrideForced);
     }
 
-    private async void ConnectCore(PairedDevice device, IReadOnlyList<string> addresses)
+    private async void ConnectCore(PairedDevice device, IReadOnlyList<string> addresses, bool isManualReconnect = false)
     {
         lock (connectingDeviceIds)
         {
@@ -731,7 +775,7 @@ public class NetworkService(
             connectingDeviceIds.Add(device.Id);
         }
 
-        logger.Info($"Connecting to paired device {device.Name}");
+        logger.Info($"Connecting to paired device {device.Name} (manual reconnect: {isManualReconnect})");
 
         var cts = new CancellationTokenSource();
         connectionCancellationTokens[device.Id] = cts;
@@ -777,7 +821,7 @@ public class NetworkService(
 
                     cts.Token.ThrowIfCancellationRequested();
 
-                    SendAuthenticationMessage(m => SendMessage(client, m));
+                    SendAuthenticationMessage(m => SendMessage(client, m), isManualReconnect);
                     device.Client = client;
                     return;
                 }
@@ -922,7 +966,7 @@ public class NetworkService(
             var pairedDevice = PairedDevices.FirstOrDefault(d => d.Id == authMessage.DeviceId);
             if (pairedDevice is not null)
             {
-                await AuthenticatePairedDeviceServer(client, pairedDevice, address, cancellationToken);
+                await AuthenticatePairedDeviceServer(client, pairedDevice, address, cancellationToken, authMessage.IsManualReconnect);
             }
             else
             {
@@ -946,8 +990,26 @@ public class NetworkService(
         }
     }
 
-    private async Task AuthenticatePairedDeviceServer(Client client, PairedDevice pairedDevice, string address, CancellationToken cancellationToken)
+    private async Task AuthenticatePairedDeviceServer(Client client, PairedDevice pairedDevice, string address, CancellationToken cancellationToken, bool isManualReconnect = false)
     {
+        if (pairedDevice.IsForcedDisconnect)
+        {
+            if (isManualReconnect)
+            {
+                logger.Info($"Paired device {pairedDevice.Name} manual reconnect requested, overriding forced disconnect");
+                await App.MainWindow.DispatcherQueue.EnqueueAsync(() =>
+                {
+                    pairedDevice.ConnectionStatus = new Disconnected(forcedDisconnect: false);
+                });
+            }
+            else
+            {
+                logger.Info($"Rejecting incoming connection from {pairedDevice.Name} because device is manually disconnected on this PC");
+                DisconnectClient(client);
+                return;
+            }
+        }
+
         if (pairedDevice.IsConnected && pairedDevice.Client is not null)
         {
             logger.Warn($"Device {pairedDevice.Name} is already connected, disconnect the current client");
