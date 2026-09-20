@@ -86,12 +86,18 @@ public partial class App : Application
             if (appActivationArguments.Data is ProtocolActivatedEventArgs protocolArgs)
                 HandleProtocolActivationArgs(protocolArgs);
 #endif
+            var appLogger = Ioc.Default.GetRequiredService<ILogger<App>>();
+            appLogger.Info($"App activated: Kind={appActivationArguments.Kind}, Data={appActivationArguments.Data?.GetType().FullName}, isStartupTask={isStartupTask}");
+
             HookEventsForWindow();
             _ = Ioc.Default.GetRequiredService<ISystemTrayService>();
 
             var rootFrame = EnsureWindowIsInitialized();
             if (rootFrame is null)
+            {
+                appLogger.Warn("EnsureWindowIsInitialized returned null!");
                 return;
+            }
 
             Ioc.Default.GetRequiredService<IAppThemeModeService>().ManageAppearance(MainWindow);
 
@@ -126,6 +132,7 @@ public partial class App : Application
                 // Wait for the Window to initialize
                 await Task.Delay(10);
                 MainWindow.AppWindow.Show();
+                ShowMainWindow();
             }
 
             rootFrame.Navigate(typeof(Views.SplashScreen));
@@ -182,6 +189,7 @@ public partial class App : Application
     /// </summary>
     public async Task OnActivatedAsync(AppActivationArguments activatedEventArgs)
     {
+        Ioc.Default.GetService<ILogger<App>>()?.Info($"OnActivatedAsync called. Kind={activatedEventArgs.Kind}");
         // InitializeApplication accesses UI, needs to be called on UI thread
         await MainWindow.DispatcherQueue.EnqueueAsync(() => InitializeApplicationAsync(activatedEventArgs));
     }
@@ -199,19 +207,16 @@ public partial class App : Application
     {
         try
         {
+            ShowMainWindow();
             switch (activatedEventArgs.Data)
             {
                 case ProtocolActivatedEventArgs protocolArgs:
                     HandleProtocolActivationArgs(protocolArgs);
                     break;
                 case ShareTargetActivatedEventArgs shareArgs:
-                    MainWindow.AppWindow.Show();
-                    MainWindow.Activate();
                     await HandleShareTargetActivation(shareArgs);
                     break;
                 default:
-                    MainWindow.AppWindow.Show();
-                    MainWindow.Activate();
                     break;
             }
         }
@@ -271,6 +276,7 @@ public partial class App : Application
 
     public static void ShowMainWindow()
     {
+        Ioc.Default.GetService<ILogger<App>>()?.Info($"ShowMainWindow called. WindowHandle={WindowHandle}");
         var presenter = MainWindow.AppWindow.Presenter as OverlappedPresenter;
         if (presenter?.State is OverlappedPresenterState.Minimized)
             presenter.Restore();
@@ -278,7 +284,11 @@ public partial class App : Application
         MainWindow.AppWindow.Show();
         MainWindow.Activate();
 #if WINDOWS
-        InteropHelpers.SetForegroundWindow(WindowHandle);
+        if (WindowHandle != 0)
+        {
+            InteropHelpers.ShowWindow(WindowHandle, 9); // SW_RESTORE = 9
+            Win32Helper.BringToForegroundEx((Vanara.PInvoke.HWND)WindowHandle);
+        }
 #endif
     }
 

@@ -67,20 +67,40 @@ public partial class PairedDevice : BaseRemoteDevice
             IsEnabled = true
         };
 
-        var dispatcher = App.MainWindow?.DispatcherQueue;
-        if (dispatcher is not null && !dispatcher.HasThreadAccess)
+        var dispatcher = App.MainWindow?.DispatcherQueue ?? Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (dispatcher is not null)
         {
-            dispatcher.TryEnqueue(() =>
+            if (dispatcher.HasThreadAccess)
             {
                 if (!Addresses.Any(a => a.Address.Equals(address, StringComparison.OrdinalIgnoreCase)))
                 {
                     Addresses.Add(entry);
                 }
-            });
+            }
+            else
+            {
+                dispatcher.TryEnqueue(() =>
+                {
+                    if (!Addresses.Any(a => a.Address.Equals(address, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Addresses.Add(entry);
+                    }
+                });
+            }
         }
         else
         {
-            Addresses.Add(entry);
+            try
+            {
+                if (!Addresses.Any(a => a.Address.Equals(address, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Addresses.Add(entry);
+                }
+            }
+            catch
+            {
+                // Prevent crash if collection is observed by UI thread
+            }
         }
         return true;
     }

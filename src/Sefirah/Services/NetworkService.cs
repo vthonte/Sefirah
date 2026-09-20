@@ -476,8 +476,11 @@ public class NetworkService(
 
         if (connectionCancellationTokens.TryRemove(pairedDevice.Id, out var cts))
         {
-            cts.Cancel();
-            cts.Dispose();
+            try
+            {
+                cts.Cancel();
+            }
+            catch { }
         }
 
         if (oldSession is not null && oldSession != session)
@@ -574,10 +577,11 @@ public class NetworkService(
             var pairedDevice = PairedDevices.FirstOrDefault(d => d.Session == session);   
             if (pairedDevice is not null)
             {
+                var wasConnected = pairedDevice.IsConnected;
                 pairedDevice.Session = null;
                 if (pairedDevice.Client is null)
                 {
-                    if (!forcedDisconnect && !pairedDevice.IsForcedDisconnect)
+                    if (wasConnected && !forcedDisconnect && !pairedDevice.IsForcedDisconnect)
                     {
                         var fallbackAddrs = pairedDevice.Addresses
                             .Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && a.Address != "127.0.0.1" && NetworkHelper.IsOnLocalSubnet(a.Address))
@@ -585,7 +589,7 @@ public class NetworkService(
 
                         if (fallbackAddrs.Count > 0)
                         {
-                            logger.Info($"Session disconnected for {pairedDevice.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
+                            logger.Info($"Active session disconnected for {pairedDevice.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
                             ConnectCore(pairedDevice, fallbackAddrs);
                             return;
                         }
@@ -622,10 +626,11 @@ public class NetworkService(
             var device = PairedDevices.FirstOrDefault(d => d.Client == client);
             if (device is not null)
             {
+                var wasConnected = device.IsConnected;
                 device.Client = null;
                 if (device.Session is null)
                 {
-                    if (!forcedDisconnect && !device.IsForcedDisconnect)
+                    if (wasConnected && !forcedDisconnect && !device.IsForcedDisconnect)
                     {
                         var fallbackAddrs = device.Addresses
                             .Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && a.Address != "127.0.0.1" && NetworkHelper.IsOnLocalSubnet(a.Address))
@@ -633,7 +638,7 @@ public class NetworkService(
 
                         if (fallbackAddrs.Count > 0)
                         {
-                            logger.Info($"Client disconnected for {device.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
+                            logger.Info($"Active client disconnected for {device.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
                             ConnectCore(device, fallbackAddrs);
                             return;
                         }
@@ -673,123 +678,130 @@ public class NetworkService(
 
     public async void Connect(string deviceId, string address, int port)
     {
-        var existingDevice = PairedDevices.FirstOrDefault(d => d.Id == deviceId);
-        if (existingDevice is not null)
-        {
-            if (!string.IsNullOrEmpty(address) && !address.StartsWith("127."))
-            {
-                existingDevice.TryAddAddress(address);
-                if (port > 0) existingDevice.Port = port;
-                _ = deviceManager.UpdateDevice(existingDevice);
-            }
-
-            if (existingDevice.IsForcedDisconnect)
-                return;
-
-            if (existingDevice.ConnectionStatus.IsConnectedOrConnecting)
-            {
-                if (existingDevice.Address == "127.0.0.1")
-                {
-                    // Device is connected via USB loopback (highest priority). Do not drop or reconnect USB for Wi-Fi discovery.
-                    return;
-                }
-
-                if (existingDevice.Address == address)
-                {
-                    // Already connected to this address.
-                    return;
-                }
-
-                if (address == "127.0.0.1")
-                {
-                    logger.Info($"Device {existingDevice.Name} connected on Wi-Fi ({existingDevice.Address}), promoting to USB loopback...");
-                }
-                else if (!NetworkHelper.IsOnLocalSubnet(existingDevice.Address))
-                {
-                    logger.Info($"Device {existingDevice.Name} was connected to {existingDevice.Address} (stale subnet), switching to {address}:{port}");
-                }
-                else
-                {
-                    return;
-                }
-            }
-
-            if (port > 0)
-                existingDevice.Port = port;
-            else if (existingDevice.Port <= 0)
-                existingDevice.Port = 5150;
-
-            ConnectCore(existingDevice, [address]);
-            return;
-        }
-
-        if (DiscoveredDevices.Any(d => d.Id == deviceId)) return;
-
-        lock (connectingDeviceIds)
-        {
-            if (connectingDeviceIds.Contains(deviceId)) return;
-            connectingDeviceIds.Add(deviceId);
-        }
-
-        logger.Info($"Connecting to discovered device {deviceId} at {address}:{port}");
-
-        var discoveredCts = new CancellationTokenSource();
-        connectionCancellationTokens[deviceId] = discoveredCts;
-
         try
         {
-            var client = new Client(SslHelper.GetSslContext(), address, port, this);
-            var tcs = new TaskCompletionSource<bool>();
-            handshakeCompletion[client.Id] = tcs;
+            var existingDevice = PairedDevices.FirstOrDefault(d => d.Id == deviceId);
+            if (existingDevice is not null)
+            {
+                if (!string.IsNullOrEmpty(address) && !address.StartsWith("127."))
+                {
+                    existingDevice.TryAddAddress(address);
+                    if (port > 0) existingDevice.Port = port;
+                    _ = deviceManager.UpdateDevice(existingDevice);
+                }
+
+                if (existingDevice.IsForcedDisconnect)
+                    return;
+
+                if (existingDevice.ConnectionStatus.IsConnectedOrConnecting)
+                {
+                    if (existingDevice.Address == "127.0.0.1")
+                    {
+                        // Device is connected via USB loopback (highest priority). Do not drop or reconnect USB for Wi-Fi discovery.
+                        return;
+                    }
+
+                    if (existingDevice.Address == address)
+                    {
+                        // Already connected to this address.
+                        return;
+                    }
+
+                    if (address == "127.0.0.1")
+                    {
+                        logger.Info($"Device {existingDevice.Name} connected on Wi-Fi ({existingDevice.Address}), promoting to USB loopback...");
+                    }
+                    else if (!NetworkHelper.IsOnLocalSubnet(existingDevice.Address))
+                    {
+                        logger.Info($"Device {existingDevice.Name} was connected to {existingDevice.Address} (stale subnet), switching to {address}:{port}");
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+
+                if (port > 0)
+                    existingDevice.Port = port;
+                else if (existingDevice.Port <= 0)
+                    existingDevice.Port = 5150;
+
+                ConnectCore(existingDevice, [address]);
+                return;
+            }
+
+            if (DiscoveredDevices.Any(d => d.Id == deviceId)) return;
+
+            lock (connectingDeviceIds)
+            {
+                if (connectingDeviceIds.Contains(deviceId)) return;
+                connectingDeviceIds.Add(deviceId);
+            }
+
+            logger.Info($"Connecting to discovered device {deviceId} at {address}:{port}");
+
+            var discoveredCts = new CancellationTokenSource();
+            connectionCancellationTokens[deviceId] = discoveredCts;
 
             try
             {
-                if (!client.ConnectAsync())
+                var client = new Client(SslHelper.GetSslContext(), address, port, this);
+                var tcs = new TaskCompletionSource<bool>();
+                handshakeCompletion[client.Id] = tcs;
+
+                try
                 {
-                    logger.Warn($"Failed to initiate connection to {address}:{port}");
-                    handshakeCompletion.TryRemove(client.Id, out _);
+                    if (!client.ConnectAsync())
+                    {
+                        logger.Warn($"Failed to initiate connection to {address}:{port}");
+                        handshakeCompletion.TryRemove(client.Id, out _);
+                        return;
+                    }
+
+                    if (!client.IsHandshaked)
+                    {
+                        using (discoveredCts.Token.Register(() => tcs.TrySetCanceled()))
+                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), discoveredCts.Token);
+                    }
+
+                    discoveredCts.Token.ThrowIfCancellationRequested();
+
+                    SendAuthenticationMessage(m => SendMessage(client, m));
                     return;
                 }
-
-                if (!client.IsHandshaked)
+                catch (OperationCanceledException)
                 {
-                    using (discoveredCts.Token.Register(() => tcs.TrySetCanceled()))
-                        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), discoveredCts.Token);
+                    throw;
                 }
-
-                discoveredCts.Token.ThrowIfCancellationRequested();
-
-                SendAuthenticationMessage(m => SendMessage(client, m));
-                return;
+                catch (Exception ex)
+                {
+                    logger.Error($"Failed to connect to discovered device at {address}:{port}", ex);
+                }
+                finally
+                {
+                    handshakeCompletion.TryRemove(client.Id, out _);
+                }
             }
             catch (OperationCanceledException)
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                logger.Error($"Failed to connect to discovered device at {address}:{port}", ex);
+                logger.Info($"Connection to discovered device {deviceId} was cancelled");
             }
             finally
             {
-                handshakeCompletion.TryRemove(client.Id, out _);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            logger.Info($"Connection to discovered device {deviceId} was cancelled");
-        }
-        finally
-        {
-            lock (connectingDeviceIds)
-            {
-                connectingDeviceIds.Remove(deviceId);
-            }
+                lock (connectingDeviceIds)
+                {
+                    connectingDeviceIds.Remove(deviceId);
+                }
 
-            if (connectionCancellationTokens.TryRemove(deviceId, out var cts))
-            {
-                cts.Dispose();
+                if (connectionCancellationTokens.TryRemove(deviceId, out var cts))
+                {
+                    try { cts.Cancel(); } catch { }
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Unexpected error in Connect for {deviceId}", ex);
         }
     }
 
@@ -829,116 +841,137 @@ public class NetworkService(
 
     private async void ConnectCore(PairedDevice device, IReadOnlyList<string> addresses, bool isManualReconnect = false)
     {
-        lock (connectingDeviceIds)
-        {
-            if (connectingDeviceIds.Contains(device.Id)) return;
-            connectingDeviceIds.Add(device.Id);
-        }
-
-        logger.Info($"Connecting to paired device {device.Name} (manual reconnect: {isManualReconnect})");
-
-        var cts = new CancellationTokenSource();
-        connectionCancellationTokens[device.Id] = cts;
-        var token = cts.Token;
-        await App.MainWindow.DispatcherQueue.EnqueueAsync(() => device.ConnectionStatus = new Connecting());
-
         try
-        {
-            var candidateAddresses = addresses.ToList();
-            var hasUsbOnline = device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline)
-                || adbService.AdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline && device.IsMatchingAdbDevice(d));
-
-            // Only prioritize USB forward tunnel (localhost:5153 -> phone:5150) if USB is online
-            // AND we do not already have an active loopback session established!
-            if (hasUsbOnline && (device.Session is null || device.Address != "127.0.0.1"))
-            {
-                candidateAddresses.Remove("127.0.0.1");
-                candidateAddresses.Insert(0, "127.0.0.1");
-            }
-
-            // Filter out addresses that are not loopback and not on any active local subnet
-            var validCandidates = candidateAddresses
-                .Where(a => a == "127.0.0.1" || NetworkHelper.IsOnLocalSubnet(a))
-                .Distinct()
-                .ToList();
-
-            if (validCandidates.Count == 0 && candidateAddresses.Count > 0)
-            {
-                logger.Warn($"No candidate addresses for {device.Name} match the current local network subnet. Available: {string.Join(", ", candidateAddresses)}");
-            }
-
-            foreach (var address in validCandidates)
-            {
-                token.ThrowIfCancellationRequested();
-
-                var clientContext = SslHelper.CreateSslContext(device.Certificate);
-                var targetPort = address == "127.0.0.1" ? 5153 : (device.Port > 0 ? device.Port : 5150);
-
-                logger.Info($"Connecting to {address}:{targetPort}");
-                var client = new Client(clientContext, address, targetPort, this);
-                var tcs = new TaskCompletionSource<bool>();
-                handshakeCompletion[client.Id] = tcs;
-
-                try
-                {
-                    if (!client.ConnectAsync())
-                    {
-                        handshakeCompletion.TryRemove(client.Id, out _);
-                        continue;
-                    }
-
-                    if (!client.IsHandshaked)
-                    {
-                        using (token.Register(() => tcs.TrySetCanceled()))
-                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), token);
-                    }
-
-                    token.ThrowIfCancellationRequested();
-
-                    SendAuthenticationMessage(m => SendMessage(client, m), isManualReconnect);
-                    device.Client = client;
-                    return;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    logger.Debug($"Failed to connect to {address}:{targetPort}", ex);
-                }
-                finally
-                {
-                    handshakeCompletion.TryRemove(client.Id, out _);
-                }
-            }
-            logger.Warn($"Failed to connect to device {device.Name} on any IP address/port combination");
-        }
-        catch (OperationCanceledException)
-        {
-            logger.Info($"Connection attempt cancelled for device {device.Name}");
-        }
-        catch (ObjectDisposedException)
-        {
-            logger.Info($"Connection cancellation token disposed for device {device.Name}");
-        }
-        catch (Exception ex)
-        {
-            logger.Error($"Unexpected error connecting to device {device.Name}", ex);
-        }
-        finally
         {
             lock (connectingDeviceIds)
             {
-                connectingDeviceIds.Remove(device.Id);
+                if (connectingDeviceIds.Contains(device.Id)) return;
+                connectingDeviceIds.Add(device.Id);
             }
 
-            if (device.IsConnecting)
+            logger.Info($"Connecting to paired device {device.Name} (manual reconnect: {isManualReconnect})");
+
+            var cts = new CancellationTokenSource();
+            connectionCancellationTokens[device.Id] = cts;
+            var token = cts.Token;
+
+            if (App.MainWindow?.DispatcherQueue is { } dq)
             {
-                await App.MainWindow.DispatcherQueue.EnqueueAsync(() => device.ConnectionStatus = new Disconnected());
+                await dq.EnqueueAsync(() => device.ConnectionStatus = new Connecting());
+            }
+            else
+            {
+                device.ConnectionStatus = new Connecting();
             }
 
-            connectionCancellationTokens.TryRemove(device.Id, out _);
+            try
+            {
+                var candidateAddresses = addresses.ToList();
+                var hasUsbOnline = device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline)
+                    || adbService.AdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline && device.IsMatchingAdbDevice(d));
+
+                // Only prioritize USB forward tunnel (localhost:5153 -> phone:5150) if USB is online
+                // AND we do not already have an active loopback session established!
+                if (hasUsbOnline && candidateAddresses.Contains("127.0.0.1") && (device.Session is null || device.Address != "127.0.0.1"))
+                {
+                    candidateAddresses.Remove("127.0.0.1");
+                    candidateAddresses.Insert(0, "127.0.0.1");
+                }
+
+                // Filter out addresses that are not loopback and not on any active local subnet
+                var validCandidates = candidateAddresses
+                    .Where(a => a == "127.0.0.1" || NetworkHelper.IsOnLocalSubnet(a))
+                    .Distinct()
+                    .ToList();
+
+                if (validCandidates.Count == 0 && candidateAddresses.Count > 0)
+                {
+                    logger.Warn($"No candidate addresses for {device.Name} match the current local network subnet. Available: {string.Join(", ", candidateAddresses)}");
+                }
+
+                foreach (var address in validCandidates)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    var clientContext = SslHelper.CreateSslContext(device.Certificate);
+                    var targetPort = address == "127.0.0.1" ? 5153 : (device.Port > 0 ? device.Port : 5150);
+
+                    logger.Info($"Connecting to {address}:{targetPort}");
+                    var client = new Client(clientContext, address, targetPort, this);
+                    var tcs = new TaskCompletionSource<bool>();
+                    handshakeCompletion[client.Id] = tcs;
+
+                    try
+                    {
+                        if (!client.ConnectAsync())
+                        {
+                            handshakeCompletion.TryRemove(client.Id, out _);
+                            continue;
+                        }
+
+                        if (!client.IsHandshaked)
+                        {
+                            using (token.Register(() => tcs.TrySetCanceled()))
+                                await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), token);
+                        }
+
+                        token.ThrowIfCancellationRequested();
+
+                        SendAuthenticationMessage(m => SendMessage(client, m), isManualReconnect);
+                        return;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Debug($"Failed to connect to {address}:{targetPort}", ex);
+                    }
+                    finally
+                    {
+                        handshakeCompletion.TryRemove(client.Id, out _);
+                    }
+                }
+                logger.Warn($"Failed to connect to device {device.Name} on any IP address/port combination");
+            }
+            catch (OperationCanceledException)
+            {
+                logger.Info($"Connection attempt cancelled for device {device.Name}");
+            }
+            catch (ObjectDisposedException)
+            {
+                logger.Info($"Connection cancellation token disposed for device {device.Name}");
+            }
+            catch (Exception ex)
+            {
+                logger.Error($"Unexpected error connecting to device {device.Name}", ex);
+            }
+            finally
+            {
+                lock (connectingDeviceIds)
+                {
+                    connectingDeviceIds.Remove(device.Id);
+                }
+
+                if (device.IsConnecting)
+                {
+                    if (App.MainWindow?.DispatcherQueue is { } mainDq)
+                    {
+                        await mainDq.EnqueueAsync(() => device.ConnectionStatus = new Disconnected());
+                    }
+                    else
+                    {
+                        device.ConnectionStatus = new Disconnected();
+                    }
+                }
+
+                connectionCancellationTokens.TryRemove(device.Id, out _);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Top-level error in ConnectCore for {device.Name}", ex);
         }
     }
 

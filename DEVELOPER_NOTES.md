@@ -236,3 +236,24 @@ Matching order:
 ### Immediate Wireless ADB
 - As soon as a USB device connects, `AdbService.AutoSetupWirelessAdbAsync` immediately enables TCP mode (`adb -s <serial> tcpip 5555`), queries the device's Wi-Fi IP via `ip -o -4 addr show wlan0`, and connects to `<target_ip>:5555` with zero polling delay.
 - When the devices connect over Wi-Fi (even without USB), `NetworkService` invokes `EnsureWirelessAdbForPairedDeviceAsync(device)`, which immediately connects to the device's port 5555 if wireless debugging / tcpip mode is already active.
+
+---
+
+## 13. UI Thread Safety, Async Void Crash Prevention, & Window Foreground Restoration
+
+### ObservableCollection Cross-Thread Safety
+- `PairedDevice.Addresses` is an `ObservableCollection<AddressEntry>` bound to XAML controls / `CollectionView`.
+- Modifying `ObservableCollection` on background threadpool threads (e.g. upon receiving UDP discovery broadcasts or background handshakes) throws:
+  `System.NotSupportedException: This type of CollectionView does not support changes to its SourceCollection from a thread other than the Dispatcher thread.`
+- `PairedDevice.TryAddAddress` ensures all collection modifications are routed through `DispatcherQueue` (checking `HasThreadAccess`) with a fallback `try-catch` to eliminate cross-thread UI collection crashes.
+
+### CTS Lifecycle & ObjectDisposedException Prevention
+- Calling `CancellationTokenSource.Dispose()` while concurrent asynchronous methods are still evaluating `token.IsCancellationRequested` or passing `cts.Token` throws `System.ObjectDisposedException: The CancellationTokenSource has been disposed.`
+- In `NetworkService.cs`, `connectionCancellationTokens` uses `cts.Cancel()` for cooperative cancellation instead of premature disposal. Only the initiating `ConnectCore` routine disposes its own completed CTS upon exit.
+- Both `Connect` and `ConnectCore` are fully wrapped in top-level `try-catch` blocks to protect `async void` dispatch from ever crashing the runtime process.
+
+### Desktop Window Bring-To-Foreground Restoration
+- When the Desktop app starts in tray or is minimized, launching the app or clicking its shortcut invokes `Program.RedirectActivationTo`.
+- `Program.RedirectActivationTo` calls `InteropHelpers.AllowSetForegroundWindow(0xFFFFFFFF)` to grant the target process permission to set foreground window.
+- `ShowMainWindow()` uses `Win32Helper.BringToForegroundEx((HWND)WindowHandle)` (using `AttachThreadInput`, `SetWindowPos`, and `SetForegroundWindow`) to restore and elevate the window over other background windows.
+

@@ -90,6 +90,7 @@ internal class Program
     public static void RedirectActivationTo(AppInstance keyInstance, AppActivationArguments args)
     {
         // WINUI3: https://github.com/microsoft/WindowsAppSDK/issues/1709
+        InteropHelpers.AllowSetForegroundWindow(0xFFFFFFFF);
 
         IntPtr redirectEventHandle = InteropHelpers.CreateEvent(IntPtr.Zero, true, false, null);
 
@@ -107,10 +108,14 @@ internal class Program
 
     private static async void OnActivated(object? sender, AppActivationArguments args)
     {
-        if (App.Current is App thisApp)
+        try
         {
-            await thisApp.OnActivatedAsync(args);
+            if (App.Current is App thisApp)
+            {
+                await thisApp.OnActivatedAsync(args);
+            }
         }
+        catch { }
     }
 
     private static void HandleHostedAppLaunch(string[] args)
