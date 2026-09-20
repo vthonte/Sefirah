@@ -52,6 +52,7 @@ public class NetworkService(
         if (isRunning) return;
 
         ConnectionStatusChanged += ConnectionStatusChangedEvent;
+        adbService.UsbDeviceReady += OnUsbDeviceReady;
 
         foreach (int port in PORT_RANGE)
         {
@@ -84,6 +85,19 @@ public class NetworkService(
         logger.Error($"Failed to start server");
     }
 
+    private void OnUsbDeviceReady(object? sender, AdbDevice usbDevice)
+    {
+        var pairedDevice = PairedDevices.FirstOrDefault(pd => pd.IsMatchingAdbDevice(usbDevice));
+        if (pairedDevice is not null && !pairedDevice.IsForcedDisconnect)
+        {
+            if (!pairedDevice.IsConnected || pairedDevice.Address != "127.0.0.1")
+            {
+                logger.Info($"USB connection ready for {pairedDevice.Name}. Promoting connection to USB (127.0.0.1)...");
+                Connect(pairedDevice, "127.0.0.1");
+            }
+        }
+    }
+
     private async void ConnectionStatusChangedEvent(object? sender, PairedDevice device)
     {
         if (device.IsConnected)
@@ -92,14 +106,7 @@ public class NetworkService(
 
             if (device.DeviceSettings.AdbAutoConnect)
             {
-                var wifiAddr = (!string.IsNullOrEmpty(device.Address) && !device.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(device.Address))
-                    ? device.Address
-                    : device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(a.Address))?.Address;
-
-                if (!string.IsNullOrEmpty(wifiAddr))
-                {
-                    await adbService.TryConnectTcp(wifiAddr, device.Model);
-                }
+                _ = adbService.EnsureWirelessAdbForPairedDeviceAsync(device);
             }
         }
     }
@@ -445,10 +452,8 @@ public class NetworkService(
 
         logger.Info($"Paired device {pairedDevice.Name} verified, updating connection");
 
-        if (pairedDevice.IsConnected && pairedDevice.Session is not null)
-        {
-            DisconnectSession(pairedDevice.Session);
-        }
+        var oldSession = pairedDevice.Session;
+        var oldClient = pairedDevice.Client;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -475,8 +480,11 @@ public class NetworkService(
             cts.Dispose();
         }
 
-        if (pairedDevice.Client is not null)
-            DisconnectClient(pairedDevice.Client);
+        if (oldSession is not null && oldSession != session)
+            DisconnectSession(oldSession);
+
+        if (oldClient is not null)
+            DisconnectClient(oldClient);
     }
 
     private async Task AddDiscoveredDevice(ServerSession session, Authentication authMessage, string address, byte[] certificate)
@@ -568,7 +576,22 @@ public class NetworkService(
             {
                 pairedDevice.Session = null;
                 if (pairedDevice.Client is null)
+                {
+                    if (!forcedDisconnect && !pairedDevice.IsForcedDisconnect)
+                    {
+                        var fallbackAddrs = pairedDevice.Addresses
+                            .Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && a.Address != "127.0.0.1" && NetworkHelper.IsOnLocalSubnet(a.Address))
+                            .Select(a => a.Address).ToList();
+
+                        if (fallbackAddrs.Count > 0)
+                        {
+                            logger.Info($"Session disconnected for {pairedDevice.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
+                            ConnectCore(pairedDevice, fallbackAddrs);
+                            return;
+                        }
+                    }
                     SetDisconnected(pairedDevice, forcedDisconnect);
+                }
             }
             else
             {
@@ -601,7 +624,22 @@ public class NetworkService(
             {
                 device.Client = null;
                 if (device.Session is null)
+                {
+                    if (!forcedDisconnect && !device.IsForcedDisconnect)
+                    {
+                        var fallbackAddrs = device.Addresses
+                            .Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && a.Address != "127.0.0.1" && NetworkHelper.IsOnLocalSubnet(a.Address))
+                            .Select(a => a.Address).ToList();
+
+                        if (fallbackAddrs.Count > 0)
+                        {
+                            logger.Info($"Client disconnected for {device.Name}. Attempting instant failover to Wi-Fi candidates: {string.Join(", ", fallbackAddrs)}");
+                            ConnectCore(device, fallbackAddrs);
+                            return;
+                        }
+                    }
                     SetDisconnected(device, forcedDisconnect);
+                }
             }
 
             var discoveredDevice = DiscoveredDevices.FirstOrDefault(d => d.Client == client);
@@ -662,8 +700,11 @@ public class NetworkService(
                     return;
                 }
 
-                // If currently connected on Wi-Fi, but to an address NOT on our current local subnet:
-                if (!NetworkHelper.IsOnLocalSubnet(existingDevice.Address))
+                if (address == "127.0.0.1")
+                {
+                    logger.Info($"Device {existingDevice.Name} connected on Wi-Fi ({existingDevice.Address}), promoting to USB loopback...");
+                }
+                else if (!NetworkHelper.IsOnLocalSubnet(existingDevice.Address))
                 {
                     logger.Info($"Device {existingDevice.Name} was connected to {existingDevice.Address} (stale subnet), switching to {address}:{port}");
                 }
@@ -849,7 +890,7 @@ public class NetworkService(
                     if (!client.IsHandshaked)
                     {
                         using (token.Register(() => tcs.TrySetCanceled()))
-                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+                            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), token);
                     }
 
                     token.ThrowIfCancellationRequested();
@@ -1048,11 +1089,8 @@ public class NetworkService(
             }
         }
 
-        if (pairedDevice.IsConnected && pairedDevice.Client is not null)
-        {
-            logger.Warn($"Device {pairedDevice.Name} is already connected, disconnect the current client");
-            DisconnectClient(pairedDevice.Client);
-        }
+        var oldClient = pairedDevice.Client;
+        var oldSession = pairedDevice.Session;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1075,8 +1113,11 @@ public class NetworkService(
 
         ConnectionStatusChanged?.Invoke(this, pairedDevice);
 
-        if (pairedDevice.Session is not null)
-            DisconnectSession(pairedDevice.Session);
+        if (oldClient is not null && oldClient != client)
+            DisconnectClient(oldClient);
+
+        if (oldSession is not null)
+            DisconnectSession(oldSession);
 
         await deviceManager.UpdateDevice(pairedDevice);
 

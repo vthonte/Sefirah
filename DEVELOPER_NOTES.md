@@ -204,3 +204,35 @@ Matching order:
      - Phone sets `isManualReconnect = true` in its `Authentication` payload.
      - Laptop receives the incoming connection, sees `authMessage.IsManualReconnect == true`, clears `IsForcedDisconnect`, and transitions to `Connected`.
    - Result: Users can disconnect from either device, and reconnect from either device at any time, with zero manual intervention on the other device.
+
+---
+
+## 12. Dynamic Multi-Network Failover, Auto-Promotion, & Immediate Wireless ADB
+
+### Dynamic Multi-Network Connection Pool
+- Any common network between Desktop and Android (Wi-Fi, Ethernet, Mobile Hotspot, USB reverse/forward tunnel) is automatically registered into `device.Addresses` / `device.addresses`.
+- Newly discovered IPs from UDP broadcast (port 5149), mDNS, or incoming TLS handshakes are immediately saved via `TryAddAddress` on Desktop and merged into database on Android.
+
+### Speed & Priority Hierarchy (Auto-Promotion)
+- **Priority 1: USB Loopback (`127.0.0.1`)** — highest speed (~480Mbps+), <1ms latency, zero wireless interference.
+- **Priority 2: Matching Local Subnet Wi-Fi / Hotspot / LAN** — high bandwidth, local network.
+- **Priority 3: Other reachable networks.**
+- **Seamless Auto-Promotion**: When connected via Wi-Fi and USB is plugged in, both sides detect the USB tunnels:
+  - On Desktop, `AdbService` fires `UsbDeviceReady` upon completing `SetupUsbPortForwardingAsync`, and `NetworkService` calls `Connect(pairedDevice, "127.0.0.1")`.
+  - On Android, `probeUsbDevice()` detects port 5152 responsive and invokes `connectPaired` if `pairedUsb.address != "127.0.0.1"`.
+  - The new loopback session/client is assigned *before* disconnecting the old Wi-Fi socket, ensuring uninterrupted connected status in the UI.
+
+### Sub-Second Failover (Zero-Drop)
+- When USB is unplugged or the active network drops unexpectedly:
+  - If `!forcedDisconnect` and `!device.IsForcedDisconnect`, the app **does not drop to "Disconnected"**.
+  - On Desktop (`DisconnectSession` / `DisconnectClient`), it instantly extracts cached candidate addresses on the local subnet and initiates `ConnectCore(device, fallbackAddrs)`. Handshake timeout is 3s for fast traversal.
+  - On Android (`startListeningForDevice` `onClose`), it immediately attempts fallback Wi-Fi addresses before declaring disconnection.
+  - The device transitions to `Connecting` -> `Connected` seamlessly without the user seeing a disconnect. Only if all candidates fail does it enter `Disconnected`.
+
+### Network Subnet Migration
+- When switching Wi-Fi networks (e.g. from Home Wi-Fi to Hotspot or Office network):
+  - In `DiscoveryService.cs` on Desktop and `NetworkDiscovery.kt` on Android, if the device is currently connected to an IP from a stale/dead subnet, but discovery receives a broadcast on the new active subnet, the system dynamically migrates and reconnects to the new matching subnet IP.
+
+### Immediate Wireless ADB
+- As soon as a USB device connects, `AdbService.AutoSetupWirelessAdbAsync` immediately enables TCP mode (`adb -s <serial> tcpip 5555`), queries the device's Wi-Fi IP via `ip -o -4 addr show wlan0`, and connects to `<target_ip>:5555` with zero polling delay.
+- When the devices connect over Wi-Fi (even without USB), `NetworkService` invokes `EnsureWirelessAdbForPairedDeviceAsync(device)`, which immediately connects to the device's port 5555 if wireless debugging / tcpip mode is already active.

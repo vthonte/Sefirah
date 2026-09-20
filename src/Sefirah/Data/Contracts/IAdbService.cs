@@ -40,4 +40,6 @@ public interface IAdbService
     Task<bool> IsLocked(DeviceData deviceData);
 
     Task SetupUsbPortForwardingAsync(AdbDevice usbDevice);
+    Task<bool> EnsureWirelessAdbForPairedDeviceAsync(PairedDevice pairedDevice);
+    event EventHandler<AdbDevice>? UsbDeviceReady;
 }

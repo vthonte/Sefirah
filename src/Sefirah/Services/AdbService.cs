@@ -25,6 +25,7 @@ public class AdbService(
     
     public ObservableCollection<AdbDevice> AdbDevices { get; } = [];
     public bool IsMonitoring => deviceMonitor is not null && !(cts?.IsCancellationRequested ?? true);
+    public event EventHandler<AdbDevice>? UsbDeviceReady;
 
     private static readonly string DEFAULT = "Default".GetLocalizedResource();
 
@@ -244,6 +245,7 @@ public class AdbService(
                 _ = Task.Run(async () =>
                 {
                     await SetupUsbPortForwardingAsync(connectedDevice);
+                    await AutoSetupWirelessAdbAsync(connectedDevice);
                 });
             }
         }
@@ -308,6 +310,7 @@ public class AdbService(
                 _ = Task.Run(async () =>
                 {
                     await SetupUsbPortForwardingAsync(deviceInfo);
+                    await AutoSetupWirelessAdbAsync(deviceInfo);
                 });
             }
         }
@@ -863,6 +866,7 @@ public class AdbService(
         await RunAdbCommandAsync(adbPath, $"-s {serial} forward --remove tcp:5150");
 
         logger.Info($"USB port forwarding set up for {serial} (reverse: 5152->5150, forward: 5151->5151, 5153->5150)");
+        UsbDeviceReady?.Invoke(this, usbDevice);
     }
 
     private async Task<string> RunAdbCommandAsync(string adbPath, string arguments)
@@ -949,12 +953,62 @@ public class AdbService(
             }
 
             logger.Info($"Auto-configuring wireless ADB for USB device {usbDevice.Serial} at {targetIp}");
+            await EnableTcpipMode(usbDevice.Serial);
+            await Task.Delay(500);
             await TryConnectTcp(targetIp, usbDevice.Model);
         }
         catch (Exception ex)
         {
             logger.Warn($"AutoSetupWirelessAdbAsync encountered an issue: {ex.Message}");
         }
+    }
+
+    public async Task<bool> EnsureWirelessAdbForPairedDeviceAsync(PairedDevice pairedDevice)
+    {
+        try
+        {
+            if (pairedDevice is null || !pairedDevice.DeviceSettings.AdbAutoConnect)
+                return false;
+
+            // Check if wireless ADB is already connected
+            if (AdbDevices.Any(d => d.IsOnline && pairedDevice.IsMatchingAdbDevice(d) && d.Type is DeviceType.WIFI))
+            {
+                return true;
+            }
+
+            // Check if USB device is online - if so, run full auto setup which turns on tcpip and connects
+            var usbDevice = AdbDevices.FirstOrDefault(d => d.IsOnline && pairedDevice.IsMatchingAdbDevice(d) && d.Type is DeviceType.USB);
+            if (usbDevice is not null)
+            {
+                await AutoSetupWirelessAdbAsync(usbDevice);
+                return AdbDevices.Any(d => d.IsOnline && pairedDevice.IsMatchingAdbDevice(d) && d.Type is DeviceType.WIFI);
+            }
+
+            // If no USB connected, try candidate Wi-Fi addresses on local subnet
+            var candidateAddresses = new List<string>();
+            if (!string.IsNullOrEmpty(pairedDevice.Address) && !pairedDevice.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(pairedDevice.Address))
+            {
+                candidateAddresses.Add(pairedDevice.Address);
+            }
+
+            foreach (var addr in pairedDevice.Addresses.Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.") && NetworkHelper.IsOnLocalSubnet(a.Address)))
+            {
+                if (!candidateAddresses.Contains(addr.Address))
+                    candidateAddresses.Add(addr.Address);
+            }
+
+            foreach (var ip in candidateAddresses)
+            {
+                if (await TryConnectTcp(ip, pairedDevice.Model))
+                    return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"EnsureWirelessAdbForPairedDeviceAsync error: {ex.Message}");
+        }
+
+        return false;
     }
 
     private async Task<string> GetDeviceIpAddressAsync(DeviceData deviceData)
