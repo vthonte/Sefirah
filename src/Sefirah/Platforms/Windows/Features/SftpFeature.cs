@@ -49,16 +49,32 @@ public class SftpFeature(
 
     public async Task Mount(PairedDevice device, SftpServerInfo info)
     {
-        if (string.IsNullOrEmpty(device.Address)) return;
+        var address = !string.IsNullOrEmpty(device.Address)
+            ? device.Address
+            : device.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address))?.Address;
 
-        _sessions[device.Id] = (device.Address, info);
+        if (string.IsNullOrEmpty(address))
+        {
+            logger.Warn($"Cannot mount SFTP for {device.Name}: device address is empty");
+            return;
+        }
 
-        if (!device.DeviceSettings.StorageAccess) return;
-        if (!StorageProviderSyncRootManager.IsSupported()) return;
+        _sessions[device.Id] = (address, info);
+
+        if (!device.DeviceSettings.StorageAccess)
+        {
+            logger.Warn($"Storage access is disabled for {device.Name} in settings");
+            return;
+        }
+        if (!StorageProviderSyncRootManager.IsSupported())
+        {
+            logger.Warn("StorageProviderSyncRootManager is not supported on this Windows version");
+            return;
+        }
 
         try
         {
-            logger.Info($"Mounting SFTP for {device.Name}, IP: {device.Address}, Port: {info.Port}, Username: {info.Username}");
+            logger.Info($"Mounting SFTP for {device.Name}, IP: {address}, Port: {info.Port}, Username: {info.Username}");
 
             var baseDirectory = userSettingsService.GeneralSettingsService.RemoteStoragePath;
             Directory.CreateDirectory(baseDirectory);
@@ -80,7 +96,7 @@ public class SftpFeature(
 
                 var sftpContext = new SftpContext
                 {
-                    Host = device.Address,
+                    Host = address,
                     Port = info.Port,
                     Directory = paths[i],
                     Username = info.Username,
@@ -99,8 +115,16 @@ public class SftpFeature(
 
     public async Task BrowseAsync(PairedDevice device)
     {
+        var deviceDirectory = Path.Combine(userSettingsService.GeneralSettingsService.RemoteStoragePath, device.Name);
+
         if (!_sessions.TryGetValue(device.Id, out var session))
         {
+            logger.Warn($"No active SFTP session for {device.Name} (device ID: {device.Id})");
+            if (Directory.Exists(deviceDirectory))
+            {
+                logger.Info($"Opening existing device directory in File Explorer: {deviceDirectory}");
+                OpenFolderInExplorer(deviceDirectory);
+            }
             return;
         }
 
@@ -114,9 +138,18 @@ public class SftpFeature(
             {
                 var folderPath = syncRoots.Count == 1
                     ? syncRoots[0].Directory
-                    : Path.Combine(userSettingsService.GeneralSettingsService.RemoteStoragePath, device.Name);
+                    : deviceDirectory;
 
-                await Launcher.LaunchFolderPathAsync(folderPath);
+                logger.Info($"Opening cloud sync root in File Explorer: {folderPath}");
+                OpenFolderInExplorer(folderPath);
+                return;
+            }
+
+            // If sync provider thread isn't ready but the directory exists, open it directly.
+            if (Directory.Exists(deviceDirectory))
+            {
+                logger.Info($"Opening device directory in File Explorer: {deviceDirectory}");
+                OpenFolderInExplorer(deviceDirectory);
                 return;
             }
 
@@ -126,6 +159,23 @@ public class SftpFeature(
         catch (Exception ex)
         {
             logger.Error($"Failed to browse device {device.Name}", ex);
+        }
+    }
+
+    private static void OpenFolderInExplorer(string folderPath)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{folderPath}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception)
+        {
+            _ = Launcher.LaunchFolderPathAsync(folderPath);
         }
     }
 
