@@ -19,10 +19,10 @@ public interface ISessionManager
     void DisconnectDevice(PairedDevice device, bool forcedDisconnect = false);
 
     /// <summary>Connects to a paired device using its enabled addresses. Cancels an in-progress attempt if one exists.</summary>
-    void Connect(PairedDevice device);
+    void Connect(PairedDevice device, bool overrideForced = false);
 
     /// <summary>Connects to a paired device at a specific address. Cancels any in-progress attempt first.</summary>
-    void Connect(PairedDevice device, string address);
+    void Connect(PairedDevice device, string address, bool overrideForced = false);
 
     void Pair(DiscoveredDevice device);
 

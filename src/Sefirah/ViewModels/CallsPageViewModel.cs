@@ -299,10 +299,9 @@ public sealed partial class CallsPageViewModel : BaseViewModel
         var root = App.MainWindow.Content?.XamlRoot;
         if (root is null || ActiveDevice is null) return;
 
-        if (!bluetoothPairingService.IsBluetoothRadioOn && !await bluetoothPairingService.TryEnableBluetoothAsync())
+        if (!bluetoothPairingService.IsBluetoothRadioOn)
         {
-            Logger.Warn("Bluetooth is unavailable or could not be turned on.");
-            return;
+            await bluetoothPairingService.TryEnableBluetoothAsync();
         }
 
         var setupDialog = new BluetoothSetupDialog(ActiveDevice) { XamlRoot = root };

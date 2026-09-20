@@ -125,6 +125,13 @@ public class MessageHandler(
                     sessionManager.DisconnectDevice(device, true);
                     break;
 
+                case Ping ping:
+                    device.SendMessage(new Pong { Timestamp = ping.Timestamp });
+                    break;
+
+                case Pong:
+                    break;
+
                 default:
                     logger.Warn($"Unknown message type received: {message.GetType().Name}");
                     break;

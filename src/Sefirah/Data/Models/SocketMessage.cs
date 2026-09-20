@@ -38,7 +38,19 @@ namespace Sefirah.Data.Models;
 [JsonDerivedType(typeof(TextMessage), nameof(TextMessage))]
 [JsonDerivedType(typeof(ThreadRequest), nameof(ThreadRequest))]
 [JsonDerivedType(typeof(UdpBroadcast), nameof(UdpBroadcast))]
+[JsonDerivedType(typeof(Ping), nameof(Ping))]
+[JsonDerivedType(typeof(Pong), nameof(Pong))]
 public class SocketMessage;
+
+public class Ping : SocketMessage
+{
+    public long Timestamp { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+}
+
+public class Pong : SocketMessage
+{
+    public long Timestamp { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+}
 
 public class Disconnect : SocketMessage;
 

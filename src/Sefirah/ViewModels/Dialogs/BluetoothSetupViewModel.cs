@@ -68,8 +68,25 @@ public sealed partial class BluetoothSetupViewModel : BaseViewModel
     private void DeclineInlinePairing() => inlinePairingDecision?.TrySetResult(false);
 
     [RelayCommand]
+    private async Task TurnOnBluetoothAsync()
+    {
+        var enabled = await bluetoothPairingService.TryEnableBluetoothAsync();
+        if (enabled)
+        {
+            ResetPanels();
+            ShowIntroPanel = true;
+            await StartSetupAsync();
+        }
+    }
+
+    [RelayCommand]
     private async Task StartSetupAsync()
     {
+        if (!bluetoothPairingService.IsBluetoothRadioOn)
+        {
+            await bluetoothPairingService.TryEnableBluetoothAsync();
+        }
+
         operationCts?.Cancel();
         operationCts?.Dispose();
         operationCts = new CancellationTokenSource();

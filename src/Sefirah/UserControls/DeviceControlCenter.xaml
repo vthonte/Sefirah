@@ -447,6 +447,13 @@
 
                                         <Button
                                             HorizontalAlignment="Stretch"
+                                            Click="ConnectButton_Click"
+                                            Visibility="{x:Bind ViewModel.Device.IsConnected, Mode=OneWay, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
+                                            <TextBlock Text="Connect" />
+                                        </Button>
+
+                                        <Button
+                                            HorizontalAlignment="Stretch"
                                             Click="DisconnectButton_Click"
                                             Visibility="{x:Bind ViewModel.Device.IsConnected, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}">
                                             <TextBlock Text="{helpers:ResourceString Name=Disconnect}" />

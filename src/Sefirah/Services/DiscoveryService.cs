@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Text;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Sefirah.Data.AppDatabase.Models;
@@ -24,6 +25,8 @@ public class DiscoveryService(
     private readonly int port = 5149;
     private List<IPEndPoint> broadcastEndpoints = [];
     private const int DiscoveryPort = 5149;
+    private CancellationTokenSource? discoveryLoopCts;
+    private bool isNetworkSubscribed;
 
     public UdpBroadcast? BroadcastMessage { get; private set; }
 
@@ -32,8 +35,6 @@ public class DiscoveryService(
         try
         {
             localDevice = await deviceManager.GetLocalDeviceAsync();
-            var localAddresses = NetworkHelper.GetAllValidAddresses();
-
             var name = await UserInformation.GetCurrentUserNameAsync();
             BroadcastMessage = new UdpBroadcast
             {
@@ -46,25 +47,7 @@ public class DiscoveryService(
             mdnsService.StartDiscovery();
             mdnsService.DiscoveredMdnsService += OnDiscoveredMdnsService;
 
-            broadcastEndpoints = [.. localAddresses.Select(ipInfo =>
-            {
-                var network = new Data.Models.IPNetwork(ipInfo.Address, ipInfo.SubnetMask);
-                var broadcastAddress = network.BroadcastAddress;
-
-                // Fallback to gateway if broadcast is limited
-                return broadcastAddress.Equals(IPAddress.Broadcast) && ipInfo.Gateway is not null
-                    ? new IPEndPoint(ipInfo.Gateway, DiscoveryPort)
-                    : new IPEndPoint(broadcastAddress, DiscoveryPort);
-
-            }).Distinct()];
-
-            // Always include default broadcast as fallback
-            broadcastEndpoints.Add(new IPEndPoint(IPAddress.Parse(DEFAULT_BROADCAST), DiscoveryPort));
-
-            var addresses = deviceManager.GetRemoteDeviceAddresses();
-            broadcastEndpoints.AddRange(addresses.Select(address => new IPEndPoint(IPAddress.Parse(address), DiscoveryPort)));
-
-            logger.Info($"Active broadcast endpoints: {string.Join(", ", broadcastEndpoints)}");
+            UpdateBroadcastEndpoints();
 
             udpClient = new MulticastClient("0.0.0.0", port, this, logger)
             {
@@ -84,10 +67,109 @@ public class DiscoveryService(
             {
                 logger.Error("Failed to connect UDP client");
             }
+
+            StartPeriodicBroadcast();
+
+            if (!isNetworkSubscribed)
+            {
+                NetworkChange.NetworkAddressChanged += OnNetworkChanged;
+                NetworkChange.NetworkAvailabilityChanged += OnNetworkChanged;
+                isNetworkSubscribed = true;
+            }
         }
         catch (Exception ex)
         {
             logger.Error($"Discovery initialization failed: {ex.Message}", ex);
+        }
+    }
+
+    private void UpdateBroadcastEndpoints()
+    {
+        var localAddresses = NetworkHelper.GetAllValidAddresses();
+        var endpoints = localAddresses.Select(ipInfo =>
+        {
+            var network = new Data.Models.IPNetwork(ipInfo.Address, ipInfo.SubnetMask);
+            var broadcastAddress = network.BroadcastAddress;
+
+            return broadcastAddress.Equals(IPAddress.Broadcast) && ipInfo.Gateway is not null
+                ? new IPEndPoint(ipInfo.Gateway, DiscoveryPort)
+                : new IPEndPoint(broadcastAddress, DiscoveryPort);
+        }).Distinct().ToList();
+
+        endpoints.Add(new IPEndPoint(IPAddress.Parse(DEFAULT_BROADCAST), DiscoveryPort));
+
+        var addresses = deviceManager.GetRemoteDeviceAddresses();
+        endpoints.AddRange(addresses.Select(address => new IPEndPoint(IPAddress.Parse(address), DiscoveryPort)));
+
+        broadcastEndpoints = endpoints.Distinct().ToList();
+        logger.Info($"Active broadcast endpoints: {string.Join(", ", broadcastEndpoints)}");
+    }
+
+    private void StartPeriodicBroadcast()
+    {
+        discoveryLoopCts?.Cancel();
+        discoveryLoopCts?.Dispose();
+        discoveryLoopCts = new CancellationTokenSource();
+        var ct = discoveryLoopCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await timer.WaitForNextTickAsync(ct);
+                    if (BroadcastMessage is not null)
+                    {
+                        BroadcastDeviceInfoAsync(BroadcastMessage);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.Debug($"Periodic broadcast error: {ex.Message}");
+                }
+            }
+        }, ct);
+    }
+
+    private void OnNetworkChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            logger.Info("Network change detected. Refreshing broadcast endpoints and re-advertising discovery...");
+            UpdateBroadcastEndpoints();
+
+            if (BroadcastMessage is not null)
+            {
+                BroadcastMessage.Port = NetworkService.ServerPort;
+                mdnsService.UnAdvertiseService();
+                mdnsService.AdvertiseService(BroadcastMessage, port);
+                BroadcastDeviceInfoAsync(BroadcastMessage);
+            }
+
+            // If any paired device is not connected or only on USB loopback, attempt auto-connect to Wi-Fi
+            foreach (var device in deviceManager.PairedDevices)
+            {
+                if (device.IsForcedDisconnect) continue;
+                if (!device.IsConnected || device.Address == "127.0.0.1")
+                {
+                    var wifiAddrs = device.Addresses.Where(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127.")).ToList();
+                    if (wifiAddrs.Count > 0)
+                    {
+                        logger.Info($"Network changed: attempting Wi-Fi connection for {device.Name}");
+                        sessionManager.Connect(device);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Error processing network change: {ex.Message}");
         }
     }
 
@@ -137,6 +219,17 @@ public class DiscoveryService(
     {
         try
         {
+            if (isNetworkSubscribed)
+            {
+                NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
+                NetworkChange.NetworkAvailabilityChanged -= OnNetworkChanged;
+                isNetworkSubscribed = false;
+            }
+
+            discoveryLoopCts?.Cancel();
+            discoveryLoopCts?.Dispose();
+            discoveryLoopCts = null;
+
             mdnsService.DiscoveredMdnsService -= OnDiscoveredMdnsService;
             mdnsService.UnAdvertiseService();
             udpClient?.Dispose();

@@ -55,10 +55,11 @@ public sealed partial class MainPageViewModel : BaseViewModel
     [RelayCommand]
     public void RefreshConnection()
     {
-        if (Device!.IsConnected)
+        if (Device is null) return;
+        if (Device.IsConnected)
             SessionManager.DisconnectDevice(Device);
 
-        SessionManager.Connect(Device);
+        SessionManager.Connect(Device, overrideForced: true);
     }
 
     [RelayCommand]
@@ -159,10 +160,11 @@ public sealed partial class MainPageViewModel : BaseViewModel
 
     public void ConnectToAddress(AddressEntry address)
     {
-        if (Device!.IsConnected)
+        if (Device is null) return;
+        if (Device.IsConnected)
             SessionManager.DisconnectDevice(Device);
 
-        SessionManager.Connect(Device, address.Address);
+        SessionManager.Connect(Device, address.Address, overrideForced: true);
     }
 
     public void DisconnectConnection()

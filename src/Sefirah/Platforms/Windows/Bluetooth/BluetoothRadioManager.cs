@@ -14,24 +14,32 @@ public sealed class BluetoothRadioManager(ILogger logger)
 
     public event Action<RadioState>? RadioStateChanged;
 
-    public async Task<bool> RefreshAsync()
+    public async Task<bool> RefreshAsync(bool force = false)
     {
         try
         {
-            if (bluetoothRadio is not null)
+            if (!force && bluetoothRadio is not null)
             {
                 return true;
             }
 
             var radios = await Radio.GetRadiosAsync();
-            bluetoothRadio = radios.FirstOrDefault(r => r.Kind is RadioKind.Bluetooth);
-            if (bluetoothRadio is null)
+            var newRadio = radios.FirstOrDefault(r => r.Kind is RadioKind.Bluetooth);
+            if (newRadio is null)
             {
                 IsBluetoothSupported = false;
+                bluetoothRadio = null;
                 return false;
             }
 
-            bluetoothRadio.StateChanged += OnBluetoothRadioStateChanged;
+            if (bluetoothRadio != newRadio)
+            {
+                if (bluetoothRadio is not null)
+                    bluetoothRadio.StateChanged -= OnBluetoothRadioStateChanged;
+                bluetoothRadio = newRadio;
+                bluetoothRadio.StateChanged += OnBluetoothRadioStateChanged;
+            }
+
             IsBluetoothSupported = true;
             return true;
         }
@@ -45,7 +53,7 @@ public sealed class BluetoothRadioManager(ILogger logger)
 
     public async Task<bool> TryEnableAsync()
     {
-        if (!await RefreshAsync() || bluetoothRadio is null)
+        if (!await RefreshAsync(force: true) || bluetoothRadio is null)
         {
             return false;
         }

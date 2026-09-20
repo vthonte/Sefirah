@@ -1,4 +1,4 @@
-﻿<ContentDialog
+<ContentDialog
     x:Class="Sefirah.Dialogs.BluetoothSetupDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -100,6 +100,11 @@
                         Text="Bluetooth turned off. Please enable Bluetooth and try again."
                         TextWrapping="Wrap"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Button
+                        Content="Turn on Bluetooth"
+                        HorizontalAlignment="Center"
+                        Margin="0,8,0,0"
+                        Command="{x:Bind ViewModel.TurnOnBluetoothCommand}" />
                 </StackPanel>
 
                 <StackPanel

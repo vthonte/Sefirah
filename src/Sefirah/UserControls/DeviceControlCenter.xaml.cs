@@ -170,6 +170,12 @@ public sealed partial class DeviceControlCenter : UserControl
         }
     }
 
+    private void ConnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.RefreshConnection();
+        ConnectionFlyout.Hide();
+    }
+
     private void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.DisconnectConnection();

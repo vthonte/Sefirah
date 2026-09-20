@@ -30,6 +30,8 @@ public class NetworkService(
     private readonly HashSet<string> connectingDeviceIds = [];
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<bool>> handshakeCompletion = [];
     private readonly ConcurrentDictionary<string, CancellationTokenSource> connectionCancellationTokens = [];
+    private readonly ConcurrentDictionary<string, DateTime> deviceLastSeen = [];
+    private CancellationTokenSource? keepAliveCts;
 
     private sealed class DeviceAuth
     {
@@ -66,6 +68,7 @@ public class NetworkService(
                     ServerPort = port;
                     isRunning = true;
                     logger.Info($"Server started on port: {port}");
+                    StartKeepAliveLoop();
                     return;
                 }
                 server.Dispose();
@@ -318,6 +321,7 @@ public class NetworkService(
         var pairedDevice = PairedDevices.FirstOrDefault(d => (d.Client?.Id == guid || d.Session?.Id == guid));
         if (pairedDevice is not null)
         {
+            deviceLastSeen[pairedDevice.Id] = DateTime.UtcNow;
             messageHandler.Value.HandleMessageAsync(pairedDevice, message);
             return;
         }
@@ -411,6 +415,7 @@ public class NetworkService(
             pairedDevice.ConnectionStatus = new Connected();
             deviceManager.ActiveDevice = pairedDevice;
         });
+        deviceLastSeen[pairedDevice.Id] = DateTime.UtcNow;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -586,8 +591,27 @@ public class NetworkService(
         var existingDevice = PairedDevices.FirstOrDefault(d => d.Id == deviceId);
         if (existingDevice is not null)
         {
-            if (existingDevice.ConnectionStatus.IsConnectedOrConnecting || existingDevice.IsForcedDisconnect)
+            if (!string.IsNullOrEmpty(address) && !address.StartsWith("127."))
+            {
+                existingDevice.TryAddAddress(address);
+                if (port > 0) existingDevice.Port = port;
+                _ = deviceManager.UpdateDevice(existingDevice);
+            }
+
+            if (existingDevice.IsForcedDisconnect)
                 return;
+
+            if (existingDevice.ConnectionStatus.IsConnectedOrConnecting)
+            {
+                if (existingDevice.Address == "127.0.0.1" && !address.StartsWith("127."))
+                {
+                    logger.Info($"Device {existingDevice.Name} is on USB loopback, but discovered on Wi-Fi {address}:{port}. Connecting Wi-Fi.");
+                }
+                else
+                {
+                    return;
+                }
+            }
 
             if (port > 0)
                 existingDevice.Port = port;
@@ -668,9 +692,14 @@ public class NetworkService(
         }
     }
 
-    public void Connect(PairedDevice device)
+    public void Connect(PairedDevice device, bool overrideForced = false)
     {
-        if (device.ConnectionStatus.IsConnectedOrConnecting || device.IsForcedDisconnect)
+        if (overrideForced && device.IsForcedDisconnect)
+        {
+            device.ConnectionStatus = new Disconnected(forcedDisconnect: false);
+        }
+
+        if (device.ConnectionStatus.IsConnectedOrConnecting || (!overrideForced && device.IsForcedDisconnect))
         {
             logger.Info($"Paired device {device.Name} is already connected/connecting or user disconnected it manually");
             return;
@@ -679,8 +708,13 @@ public class NetworkService(
         ConnectCore(device, device.GetEnabledAddresses());
     }
 
-    public void Connect(PairedDevice device, string address)
+    public void Connect(PairedDevice device, string address, bool overrideForced = false)
     {
+        if (overrideForced && device.IsForcedDisconnect)
+        {
+            device.ConnectionStatus = new Disconnected(forcedDisconnect: false);
+        }
+
         if (connectionCancellationTokens.TryRemove(device.Id, out var removedCts))
         {
             removedCts.Cancel();
@@ -706,11 +740,13 @@ public class NetworkService(
         try
         {
             var candidateAddresses = addresses.ToList();
-            if (device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline))
+            var hasUsbOnline = device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline)
+                || adbService.AdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline && device.IsMatchingAdbDevice(d));
+            if (hasUsbOnline)
             {
                 // Prioritize USB forward tunnel (localhost:5153 -> phone:5150)
-                if (!candidateAddresses.Contains("127.0.0.1"))
-                    candidateAddresses.Insert(0, "127.0.0.1");
+                candidateAddresses.Remove("127.0.0.1");
+                candidateAddresses.Insert(0, "127.0.0.1");
             }
 
             foreach (var address in candidateAddresses)
@@ -933,6 +969,7 @@ public class NetworkService(
             pairedDevice.ConnectionStatus = new Connected();
             deviceManager.ActiveDevice = pairedDevice;
         });
+        deviceLastSeen[pairedDevice.Id] = DateTime.UtcNow;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -973,4 +1010,57 @@ public class NetworkService(
     #endregion
 
     #endregion
+
+    private void StartKeepAliveLoop()
+    {
+        keepAliveCts?.Cancel();
+        keepAliveCts?.Dispose();
+        keepAliveCts = new CancellationTokenSource();
+        var ct = keepAliveCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await timer.WaitForNextTickAsync(ct);
+                    var now = DateTime.UtcNow;
+
+                    foreach (var device in PairedDevices.Where(d => d.IsConnected).ToList())
+                    {
+                        if (device.Session is null && device.Client is null)
+                            continue;
+
+                        // Check timeout: 15 seconds without any message/pong from device
+                        if (deviceLastSeen.TryGetValue(device.Id, out var lastSeen))
+                        {
+                            if (now - lastSeen > TimeSpan.FromSeconds(15))
+                            {
+                                logger.Warn($"Device {device.Name} ({device.Id}) ping timed out (>15s since last message). Disconnecting dead session.");
+                                DisconnectDevice(device, forcedDisconnect: false);
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            deviceLastSeen[device.Id] = now;
+                        }
+
+                        // Send 5-second ping
+                        device.SendMessage(new Ping { Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.Debug($"Error in keep-alive loop: {ex.Message}");
+                }
+            }
+        }, ct);
+    }
 }
