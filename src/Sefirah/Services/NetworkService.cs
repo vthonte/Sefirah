@@ -582,7 +582,7 @@ public class NetworkService(
         var existingDevice = PairedDevices.FirstOrDefault(d => d.Id == deviceId);
         if (existingDevice is not null)
         {
-            if (existingDevice.IsConnectedOrConnecting || existingDevice.IsForcedDisconnect)
+            if (existingDevice.ConnectionStatus.IsConnectedOrConnecting || existingDevice.IsForcedDisconnect)
                 return;
 
             if (port > 0)
@@ -602,51 +602,73 @@ public class NetworkService(
             connectingDeviceIds.Add(deviceId);
         }
 
-        Client? client = null;
+        logger.Info($"Connecting to discovered device {deviceId} at {address}:{port}");
+
+        var discoveredCts = new CancellationTokenSource();
+        connectionCancellationTokens[deviceId] = discoveredCts;
+
         try
         {
-            var targetPort = port > 0 ? port : 5150;
-            logger.Info($"Connecting to {address}:{targetPort}");
-
-            client = new Client(SslHelper.GetSslContext(), address, targetPort, this);
+            var client = new Client(SslHelper.GetSslContext(), address, port, this);
             var tcs = new TaskCompletionSource<bool>();
             handshakeCompletion[client.Id] = tcs;
 
             try
             {
-                if (client.ConnectAsync())
+                if (!client.ConnectAsync())
                 {
-                    if (!client.IsHandshaked)
-                        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
-
-                    SendAuthenticationMessage(m => SendMessage(client, m));
+                    logger.Warn($"Failed to initiate connection to {address}:{port}");
+                    handshakeCompletion.TryRemove(client.Id, out _);
+                    return;
                 }
+
+                if (!client.IsHandshaked)
+                {
+                    using (discoveredCts.Token.Register(() => tcs.TrySetCanceled()))
+                        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), discoveredCts.Token);
+                }
+
+                discoveredCts.Token.ThrowIfCancellationRequested();
+
+                SendAuthenticationMessage(m => SendMessage(client, m));
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                logger.Warn($"Error connecting to {address}:{port}", ex);
+                logger.Error($"Failed to connect to discovered device at {address}:{port}", ex);
             }
+            finally
+            {
+                handshakeCompletion.TryRemove(client.Id, out _);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            logger.Info($"Connection to discovered device {deviceId} was cancelled");
         }
         finally
         {
-            if (client is not null)
-                handshakeCompletion.TryRemove(client.Id, out _);
-
             lock (connectingDeviceIds)
             {
                 connectingDeviceIds.Remove(deviceId);
+            }
+
+            if (connectionCancellationTokens.TryRemove(deviceId, out var cts))
+            {
+                cts.Dispose();
             }
         }
     }
 
     public void Connect(PairedDevice device)
     {
-        if (connectionCancellationTokens.TryRemove(device.Id, out var removedCts))
+        if (device.ConnectionStatus.IsConnectedOrConnecting || device.IsForcedDisconnect)
         {
-            removedCts.Cancel();
-            removedCts.Dispose();
-            if (device.IsConnecting)
-                App.MainWindow.DispatcherQueue.EnqueueAsync(() => device.ConnectionStatus = new Disconnected());
+            logger.Info($"Paired device {device.Name} is already connected/connecting or user disconnected it manually");
             return;
         }
 
@@ -679,12 +701,20 @@ public class NetworkService(
 
         try
         {
-            foreach (var address in addresses)
+            var candidateAddresses = addresses.ToList();
+            if (device.ConnectedAdbDevices.Any(d => d.Type == DeviceType.USB && d.IsOnline))
+            {
+                // Prioritize USB forward tunnel (localhost:5153 -> phone:5150)
+                if (!candidateAddresses.Contains("127.0.0.1"))
+                    candidateAddresses.Insert(0, "127.0.0.1");
+            }
+
+            foreach (var address in candidateAddresses)
             {
                 cts.Token.ThrowIfCancellationRequested();
 
                 var clientContext = SslHelper.CreateSslContext(device.Certificate);
-                var targetPort = device.Port > 0 ? device.Port : 5150;
+                var targetPort = address == "127.0.0.1" ? 5153 : (device.Port > 0 ? device.Port : 5150);
 
                 logger.Info($"Connecting to {address}:{targetPort}");
                 var client = new Client(clientContext, address, targetPort, this);

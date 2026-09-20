@@ -885,16 +885,20 @@ public class AdbService(
 
         var serial = usbDevice.Serial;
 
-        // adb reverse tcp:5152 tcp:5150 — phone connects to 127.0.0.1:5152 which tunnels to desktop's 5150
+        // 1. adb reverse tcp:5152 tcp:5150 — phone connects to 127.0.0.1:5152 which tunnels to desktop's 5150
         await RunAdbCommandAsync(adbPath, $"-s {serial} reverse tcp:5152 tcp:5150");
 
-        // adb forward tcp:5151 tcp:5151 — desktop connects to localhost:5151 which tunnels to phone's SFTP 5151
+        // 2. adb forward tcp:5151 tcp:5151 — desktop connects to localhost:5151 which tunnels to phone's SFTP 5151
         await RunAdbCommandAsync(adbPath, $"-s {serial} forward tcp:5151 tcp:5151");
 
-        // adb forward tcp:5150 tcp:5150 — desktop connects to localhost:5150 which tunnels to phone's 5150
-        await RunAdbCommandAsync(adbPath, $"-s {serial} forward tcp:5150 tcp:5150");
+        // 3. adb forward tcp:5153 tcp:5150 — desktop connects to localhost:5153 which tunnels to phone's TCP 5150
+        // (Uses port 5153 to avoid conflicting with Desktop Sefirah's own server on 5150)
+        await RunAdbCommandAsync(adbPath, $"-s {serial} forward tcp:5153 tcp:5150");
 
-        logger.Info($"USB port forwarding set up for {serial}");
+        // 4. Remove any conflicting forward on port 5150 if it was previously set
+        await RunAdbCommandAsync(adbPath, $"-s {serial} forward --remove tcp:5150");
+
+        logger.Info($"USB port forwarding set up for {serial} (reverse: 5152->5150, forward: 5151->5151, 5153->5150)");
     }
 
     private async Task<string> RunAdbCommandAsync(string adbPath, string arguments)
@@ -939,7 +943,7 @@ public class AdbService(
             var adbPath = userSettingsService.GeneralSettingsService.AdbPath;
             if (string.IsNullOrEmpty(adbPath)) return;
 
-            // Find device IP: first check paired devices
+            // Find device IP: first check paired devices (excluding loopback)
             string targetIp = string.Empty;
             var pairedDevice = deviceManager.PairedDevices.FirstOrDefault(pd => pd.IsMatchingAdbDevice(usbDevice));
             if (pairedDevice is not null)
@@ -950,21 +954,27 @@ public class AdbService(
                     return;
                 }
 
-                if (!string.IsNullOrEmpty(pairedDevice.Address))
+                if (!string.IsNullOrEmpty(pairedDevice.Address) && !pairedDevice.Address.StartsWith("127."))
                 {
                     targetIp = pairedDevice.Address;
+                }
+                else
+                {
+                    var wifiAddr = pairedDevice.Addresses.FirstOrDefault(a => a.IsEnabled && !string.IsNullOrEmpty(a.Address) && !a.Address.StartsWith("127."));
+                    if (wifiAddr is not null)
+                        targetIp = wifiAddr.Address;
                 }
             }
 
             // If not found from paired device, query IP directly from Android via adb shell
-            if (string.IsNullOrEmpty(targetIp))
+            if (string.IsNullOrEmpty(targetIp) || targetIp.StartsWith("127."))
             {
                 targetIp = await GetDeviceIpAddressAsync(usbDevice.DeviceData);
             }
 
-            if (string.IsNullOrEmpty(targetIp))
+            if (string.IsNullOrEmpty(targetIp) || targetIp.StartsWith("127."))
             {
-                logger.Debug($"Could not determine IP address for USB device {usbDevice.Serial}");
+                logger.Debug($"Could not determine Wi-Fi IP address for USB device {usbDevice.Serial}, skipping auto wireless setup");
                 return;
             }
 

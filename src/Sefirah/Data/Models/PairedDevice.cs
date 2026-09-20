@@ -237,6 +237,12 @@ public partial class PairedDevice : BaseRemoteDevice
         Id = deviceId;
         adbService.AdbDevices.CollectionChanged += OnAdbDevicesChanged;
         deviceSettings = userSettingsService.GetDeviceSettings(deviceId);
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(Model) or nameof(Address) or nameof(Addresses))
+                RefreshConnectedAdbDevices();
+        };
+        RefreshConnectedAdbDevices();
     }
 
     private static string NormalizeModelName(string? model)
@@ -274,6 +280,11 @@ public partial class PairedDevice : BaseRemoteDevice
             }
         }
 
+        // 4. Fallback: If this is the only paired device, match any online ADB device
+        var devMgr = Ioc.Default.GetService<IDeviceManager>();
+        if (devMgr?.PairedDevices.Count == 1 && devMgr.PairedDevices[0].Id == Id)
+            return true;
+
         return false;
     }
 
@@ -298,7 +309,7 @@ public partial class PairedDevice : BaseRemoteDevice
         OnPropertyChanged(nameof(HasAdbConnection));
     }
 
-    private async void RefreshConnectedAdbDevices()
+    public async void RefreshConnectedAdbDevices()
     {
         try
         {

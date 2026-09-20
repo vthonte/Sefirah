@@ -127,6 +127,8 @@ public sealed partial class DeviceControlCenter : UserControl
     {
         if (sender is Flyout flyout)
             CenterFlyout(flyout);
+
+        ViewModel.Device?.RefreshConnectedAdbDevices();
     }
 
     private void CenterFlyout(Flyout flyout)

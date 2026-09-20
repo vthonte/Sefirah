@@ -1,0 +1,128 @@
+# Sefirah AI Developer Notes & Context Guide
+
+This document is written for future developers and AI assistants continuing work on the **Sefirah** multi-device integration ecosystem (Windows Desktop WinUI 3 App + Android Jetpack Compose App).
+
+---
+
+## 1. System Architecture Overview
+
+Sefirah is a cross-device continuity app (similar to KDE Connect / Microsoft Phone Link) connecting Android devices and Windows PCs.
+
+- **Desktop App Repository**: `j:\mydata\work\Sefirah` (WinUI 3 / .NET 10 preview / C#)
+- **Android App Repository**: `j:\mydata\work\Sefirah-Android` (Kotlin, Jetpack Compose, Coroutines/Flow, Hilt, KSP)
+- **Active Git Branch**: `feature/ai` on both repositories.
+
+---
+
+## 2. Network Topology & Ports
+
+| Port | Protocol | Usage | Direction / Binding |
+|------|----------|-------|---------------------|
+| **5150** | TCP (TLSv1.2) | Sefirah Core Protocol | **Desktop** binds `0.0.0.0:5150`. **Android** binds `0.0.0.0:5150` for its own server. |
+| **5149** | UDP | Device Discovery Broadcast | Multicast/broadcast on all active network adapters |
+| **5151** | TCP (SFTP) | SFTP Remote Storage | **Android** runs SSH/SFTP server on port 5151 for Browse Files |
+| **5152** | TCP (Loopback) | **Phone -> Desktop USB Tunnel** | `adb reverse tcp:5152 tcp:5150`. Android connects to `127.0.0.1:5152` which tunnels to Desktop port 5150. |
+| **5153** | TCP (Loopback) | **Desktop -> Phone USB Tunnel** | `adb forward tcp:5153 tcp:5150`. Desktop connects to `127.0.0.1:5153` which tunnels to Android port 5150. |
+| **5555** | TCP | Wireless ADB Daemon | Standard Android ADB over Wi-Fi port |
+
+### ⚠️ CRITICAL NETWORKING RULES & PITFALLS
+1. **DO NOT run `adb forward tcp:5150 tcp:5150`!**
+   - Sefirah Desktop binds `0.0.0.0:5150`.
+   - Running `adb forward tcp:5150 tcp:5150` makes the Windows `adb.exe` daemon bind `127.0.0.1:5150`, hijacking localhost port 5150.
+   - Any connection to `127.0.0.1:5150` or from `adb reverse tcp:5152 tcp:5150` loops back into ADB itself, causing complete failure.
+   - Use **`tcp:5153`** for Desktop -> Phone forward tunnel (`adb forward tcp:5153 tcp:5150`).
+2. **DO NOT set Port to 5152 in the QR Code payload!**
+   - The QR code payload (`QrCodePayload`) has a single `Port` field (`Port: 5150`).
+   - If `Port: 5152` is written into the QR payload, Wi-Fi connections fail because Desktop has no server listening on 5152.
+   - Port MUST always be `5150`. Android `NetworkService.kt` specifically routes `127.0.0.1` to port `5152`.
+3. **DO NOT attempt wireless ADB (`adb connect 127.0.0.1:5555`)!**
+   - In `AutoSetupWirelessAdbAsync`, always filter out `127.0.0.1` and `127.*` addresses.
+   - Running `adb tcpip 5555` on a loopback target causes the USB connection to reset/drop in a loop. Only connect to real Wi-Fi IPs (`192.168.x.x`).
+
+---
+
+## 3. Pairing & Discovery Mechanisms
+
+### QR Code Pairing
+- Generated in `DiscoveryService.cs` (`GenerateQrCodeAsync`).
+- Deep link format: `sefirah-ai://pair?data=<UrlEncodedJsonPayload>`.
+- `addresses`: List of valid IPs. When USB is connected, `127.0.0.1` is inserted at index 0.
+- Android parser: `QrCodeParser.kt` decodes the deep link.
+- In `QrConnectionDialog.kt`, users can tap any discovered IP or enter a custom IP.
+
+### Automatic USB Discovery
+- In Android `NetworkDiscovery.kt`:
+  `probeUsbDevice()` connects to `127.0.0.1:5152` (adb reverse).
+  If open, it calls `networkManager.connectTo(...)` (or `connectPaired` if already paired).
+  This allows Desktop to show up under **Available Devices** on the phone over pure USB without Wi-Fi or QR scanning!
+
+### Wi-Fi Discovery
+- Android and Desktop exchange `UdpBroadcast` packets on UDP port `5149` and advertise via mDNS / NSD.
+
+---
+
+## 4. Connection State & Status Unification
+
+### Desktop (`PairedDevice.cs`)
+- `ConnectionStatus` (represents the **TCP protocol session**): `Connected`, `Connecting`, `Disconnected`.
+- `HasAdbConnection`: Boolean indicating if an online ADB device matches this paired device.
+- `IsConnected`: `ConnectionStatus.IsConnected || HasAdbConnection`. (True if EITHER TCP or ADB is established).
+- `IsDisconnected`: `ConnectionStatus.IsDisconnected && !HasAdbConnection`.
+- `ConnectionStatusText`: Returns `"Connected (USB)"` or `"Connected (ADB)"` when `HasAdbConnection` is true, or `"Connected"` if TCP is connected.
+- **IMPORTANT**: In `NetworkService.cs` `Connect()`, check `existingDevice.ConnectionStatus.IsConnectedOrConnecting`, NOT `existingDevice.IsConnectedOrConnecting`! Otherwise, having an ADB connection blocks Desktop from ever establishing the TCP protocol connection!
+
+### ADB Device Matching (`IsMatchingAdbDevice`)
+Matching order:
+1. `adbDevice.AndroidId == Id` (retrieved via `cat /storage/emulated/0/Android/data/com.castle.sefirah.ai/files/device_info.txt`).
+2. IP address matching (for Wi-Fi ADB serial `<IP>:<PORT>`).
+3. Normalized model name matching (strips non-alphanumeric chars; `SM-S918B` matches `SM_S918B`).
+4. **Single-device fallback**: If `PairedDevices.Count == 1`, any online ADB device belongs to this device.
+5. In `DeviceControlCenter.xaml.cs`, `PaneFlyout_Opened` calls `ViewModel.Device?.RefreshConnectedAdbDevices()` to ensure the list is always populated when clicked.
+
+---
+
+## 5. Storage / Browse Files (SFTP)
+
+- Android starts SFTP server on port `5151` (`SftpService`).
+- Windows connects to `127.0.0.1:5151` (via `adb forward tcp:5151 tcp:5151` when USB is connected) or Wi-Fi IP.
+- Mount point: `%USERPROFILE%\RemoteDevices\<DeviceName>`.
+- `BrowseAsync` in `SftpFeature.cs` ensures directory creation via `Directory.CreateDirectory(deviceDirectory)` and opens in File Explorer (`explorer.exe "<folderPath>"`).
+
+---
+
+## 6. Scrcpy & Screen Mirroring
+
+- `ScreenMirrorService.cs`:
+  - `FlexDisplay` default set to `true` in `DeviceSettingsService.cs`.
+  - Scrcpy executable: `C:\Users\HP\Downloads\scrcpy-win64-v4.1\scrcpy-win64-v4.1\scrcpy.exe`.
+  - Automatically selects USB device (`-s <Serial>`) when available (`ScrcpyDevicePreferenceType.Auto`).
+
+---
+
+## 7. Notification Handling (WhatsApp / Upload Spam Fix)
+
+- In Android `NotificationFeature.kt`:
+  - Ongoing progress notifications (e.g. sending file, downloading media) have `EXTRA_PROGRESS >= 0`.
+  - Updated notifications with existing keys send `NotificationInfoType.Active` instead of `NotificationInfoType.New`.
+  - This prevents Windows from creating repetitive toast popup notifications while files are uploading.
+
+---
+
+## 8. Build, Upgrade, & Installation Workflow
+
+### Desktop Build & In-Place Upgrade
+- **Script**: `powershell -ExecutionPolicy Bypass -File scripts\Build-Local.ps1 -Install`
+- **In-Place Upgrades**: Uses `Add-AppxPackage -Path $msix.FullName -ForceUpdateFromAnyVersion`.
+  - **DO NOT USE `Remove-AppxPackage`**: Uninstalling deletes the SQLite database (`%LOCALAPPDATA%\Packages\vthonte.Sefirah-AI_9yhjgvpvzzxz2\LocalState\sefirah.db`) and user certificates, forcing the user to re-pair!
+  - Always bump `<Identity Version="x.y.z.0" ... />` in `src/Sefirah/Package.appxmanifest` for every build.
+
+### Android Build & Install
+- `.\gradlew.bat assembleDebug`
+- `& "C:\Users\HP\Downloads\scrcpy-win64-v4.1\scrcpy-win64-v4.1\adb.exe" -s RZCXC020ZME install -r "app\build\outputs\apk\debug\app-debug.apk"`
+
+---
+
+## 9. Current Device Hardware & Testing Setup
+- **PC**: Windows 11 Desktop (x64), Package Name `vthonte.Sefirah-AI_9yhjgvpvzzxz2`.
+- **Phone**: Samsung Galaxy S23 Ultra (`SM-S918B`), Serial `RZCXC020ZME`, Package ID `com.castle.sefirah.ai`.
+- **ADB Path**: `C:\Users\HP\Downloads\scrcpy-win64-v4.1\scrcpy-win64-v4.1\adb.exe`.

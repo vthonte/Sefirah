@@ -170,13 +170,11 @@ public class DiscoveryService(
             }
 
             var port = NetworkService.ServerPort > 0 ? NetworkService.ServerPort : broadcast.Port;
-            // Use port 5152 for loopback (adb reverse tunnel) if the first address is loopback
-            var qrPort = addresses.FirstOrDefault() == "127.0.0.1" ? 5152 : port;
 
             var payload = new QrCodePayload
             {
                 Addresses = addresses,
-                Port = qrPort,
+                Port = port,
                 DeviceId = broadcast.DeviceId,
                 DeviceName = broadcast.DeviceName
             };
